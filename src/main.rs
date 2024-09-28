@@ -1,10 +1,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")] // hide console window on Windows in release
 
 use eframe::{egui, egui::Visuals};
-use egui::{epaint::PathShape, util::id_type_map::TypeId};
-use std::{fs::{self, canonicalize, File}, io::{BufReader, Write}, path::Path, process::Command, str, sync::mpsc::Receiver, thread::{self, JoinHandle}, time::Duration};
-use std::sync::mpsc;
-use rodio::{source::Source, Decoder, OutputStream, OutputStreamHandle};
+use std::{fs::{self, File}, io::BufReader, str, time::Duration};
+use rodio::{OutputStream, OutputStreamHandle};
 
 fn main() -> Result<(), eframe::Error> {
     let options = eframe::NativeOptions {
@@ -29,6 +27,7 @@ struct App {
     sel_type: SelectionType,
     cur_song_path: String,
     songs_list: Vec<String>,
+    error: String,
 }
 
 impl Default for App {
@@ -54,8 +53,9 @@ impl Default for App {
             sink: rodio::Sink::try_new(&i2).unwrap(),
             stream_handle: i2,
             sel_type: SelectionType::All,
-            cur_song_path: format!("{}", songls.get(0).unwrap()),
+            cur_song_path: format!("songs\\{}", songls.get(0).unwrap()),
             songs_list: songls,
+            error: format!(""),
         }
     }
 }
@@ -83,11 +83,14 @@ impl eframe::App for App {
             if ui.button("Get").clicked() {
                 let paths = fs::read_dir("songs\\");
                 match paths {
-                    Ok(pat) => for p in pat {
-                        self.songs_list.clear();
-                        self.songs_list.push(format!("{}", format!("{}", 
-                            p.unwrap().path().to_str().unwrap().split("\\").collect::<Vec<&str>>().last().unwrap())
-                        ));
+                    Ok(pat) => {
+                    self.songs_list.clear();
+                    for p in pat {
+                        if let Ok(a) = p {
+                            println!("Pushing {}", a.file_name().into_string().unwrap());
+                            self.songs_list.push(a.file_name().into_string().unwrap());
+                        }
+                    }
                     },
                     Err(_) => {
                         self.songs_list.clear();
@@ -95,24 +98,41 @@ impl eframe::App for App {
                     },
                 }
             }
+            let mut i = 0;
             for dir in &self.songs_list {
                 ui.horizontal(|ui| {
                     ui.label(dir);
                     if ui.button(">>").clicked() {
-                        let file = BufReader::new(File::open(format!("songs\\{}", self.songs_list.get(0).unwrap())).unwrap());
-                        self.sink.append(rodio::Decoder::new(file).unwrap());
+                        let file = BufReader::new(File::open(format!("songs\\{}", self.songs_list.get(i).unwrap())).unwrap());
+                        let elem = rodio::Decoder::new(file);
+                        self.error = match elem {
+                            Ok(a) => {self.sink.append(a); format!("")},
+                            Err(_) => format!("Error in decoding song :("),
+                        }
                     }
                 });
+                i += 1;
             }
-
+            ui.label(&self.error);
         });
         
         egui::TopBottomPanel::bottom("Player").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 if ui.button("Play").clicked() {
-                    //println!("{}", self.cur_song_path);
-                    let file = BufReader::new(File::open(&self.cur_song_path).unwrap());
-                    self.sink.append(rodio::Decoder::new(file).unwrap());
+                    let open_file = File::open(&self.cur_song_path);
+
+                    if let Ok(o) = open_file {
+                        let file = BufReader::new(o);
+
+                        let elem = rodio::Decoder::new(file);
+                        self.error = match elem {
+                            Ok(a) => {self.sink.append(a); format!("")},
+                            Err(_) => format!("Error in decoding song :("),
+                        }
+                    }
+                    else {
+                        self.error = format!("File not found: {}", &self.cur_song_path);
+                    }
                 }
                 match self.sink.is_paused() {
                     true => if ui.button("Unpause").clicked() {self.sink.play();},
@@ -123,8 +143,4 @@ impl eframe::App for App {
             });
         });
     }
-}
-
-fn playtrack(path: &str) {
-
 }
