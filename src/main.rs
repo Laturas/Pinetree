@@ -123,7 +123,24 @@ impl eframe::App for App {
                         
                         let elem = rodio::Decoder::new_mp3(reader);
                         self.error = match elem {
-                            Ok(a) => {self.total_duration = 10000 as u64; self.sink.append(a); format!("")},
+                            Ok(a) => {
+                                self.total_duration = 10000 as u64;
+                                
+                                self.sink.stop();
+                                //for channel in a {
+//
+                                //}
+                                //let sra= a.sample_rate() as u64;
+                                //self.total_duration = (a.current_frame_len().unwrap() * a.channels() as usize) as u64 / sra;
+                                //println!("{}\n", a.channels());
+                                self.total_duration = a.total_duration().unwrap().as_millis() as u64;
+
+                                self.start_system = SystemTime::now();
+                                self.position = 0; 
+                                self.start_milis = 0;
+
+                                self.sink.append(a); 
+                                format!("")},
                             Err(_) => format!("Error in decoding song :("),
                         }
                     }
@@ -170,7 +187,11 @@ impl eframe::App for App {
 
                 //let mut total = total_len.as_millis() as u64;
                 
-                let seeker = ui.add(egui::Slider::new(&mut self.position, 0..=self.total_duration));
+                let seeker = ui.add(
+                    egui::Slider::new(&mut self.position, 0..=self.total_duration)
+                    .handle_shape(egui::style::HandleShape::Rect { aspect_ratio: 1.0 })
+                );
+                
                 if seeker.dragged() {
                     let _ = self.sink.try_seek(Duration::from_millis(self.position));
                     self.start_system = SystemTime::now();
