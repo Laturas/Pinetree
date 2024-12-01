@@ -1,8 +1,9 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")] // hide console window on Windows in release
 
 use eframe::{egui, egui::Visuals};
-use std::{fs::{self, File, Metadata}, io::BufReader, str, time::{Duration, SystemTime}};
+use std::{fs::{self, File, Metadata}, io::BufReader, path::Path, str, time::{Duration, SystemTime}};
 use rodio::{decoder, Decoder, OutputStream, OutputStreamHandle, Source, Sink};
+use mp3_duration;
 
 fn main() -> Result<(), eframe::Error> {
     let options = eframe::NativeOptions {
@@ -118,7 +119,8 @@ impl eframe::App for App {
                 ui.horizontal(|ui| {
                     ui.label(dir);
                     if ui.button(">>").clicked() {
-                        let file = File::open(format!("songs\\{}", self.songs_list.get(i).unwrap())).unwrap();
+                        let fp = format!("songs\\{}", self.songs_list.get(i).unwrap());
+                        let file = File::open(&fp).unwrap();
                         let reader = BufReader::new(file);
                         
                         let elem = rodio::Decoder::new_mp3(reader);
@@ -126,14 +128,9 @@ impl eframe::App for App {
                             Ok(a) => {
                                 self.total_duration = 10000 as u64;
                                 
+                                let path = Path::new(&fp);
+                                self.total_duration = mp3_duration::from_path(&path).unwrap().as_millis() as u64;
                                 self.sink.stop();
-                                //for channel in a {
-//
-                                //}
-                                //let sra= a.sample_rate() as u64;
-                                //self.total_duration = (a.current_frame_len().unwrap() * a.channels() as usize) as u64 / sra;
-                                //println!("{}\n", a.channels());
-                                self.total_duration = a.total_duration().unwrap().as_millis() as u64;
 
                                 self.start_system = SystemTime::now();
                                 self.position = 0; 
@@ -173,7 +170,9 @@ impl eframe::App for App {
                     false => if ui.button("Pause").clicked() {self.sink.pause();},
                 }
                 
-                if ui.button("Kill").clicked() {self.sink.stop();}
+                if ui.button("Kill").clicked() {
+                    self.sink.skip_one();
+                }
 
                 let milis = match self.start_system.elapsed() {
                     Ok(elapsed) => elapsed.as_millis() as u64 + self.start_milis,
@@ -186,11 +185,16 @@ impl eframe::App for App {
                 //};
 
                 //let mut total = total_len.as_millis() as u64;
+                let og_spacing = ui.spacing().slider_width;
+                let size = ctx.available_rect().size().x - 353.0;
+                ui.spacing_mut().slider_width = size;
                 
                 let seeker = ui.add(
                     egui::Slider::new(&mut self.position, 0..=self.total_duration)
                     .handle_shape(egui::style::HandleShape::Rect { aspect_ratio: 1.0 })
+                    
                 );
+                ui.spacing_mut().slider_width = og_spacing;
                 
                 if seeker.dragged() {
                     let _ = self.sink.try_seek(Duration::from_millis(self.position));

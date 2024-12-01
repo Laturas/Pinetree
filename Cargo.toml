@@ -8,4 +8,5 @@ edition = "2021"
 [dependencies]
 eframe = "0.27.2"
 egui = "0.27.2"
+mp3-duration = "0.1.10"
 rodio = "0.18.1"
