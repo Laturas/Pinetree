@@ -3,6 +3,9 @@
 use eframe::{egui, egui::Visuals};
 use std::{fs::{self, File}, io::BufReader, path::Path, str, time::{Duration, SystemTime}};
 use rodio::OutputStream;
+
+// This is a really stupid dependency but as it turns out I guess this is a non-trivial problem???
+// Rodio's built in functionality for this just doesn't work most of the time for some reason.
 use mp3_duration;
 
 fn main() -> Result<(), eframe::Error> {
@@ -35,6 +38,7 @@ struct App {
     start_milis: u64,
     position: u64,
     total_duration: u64,
+    loopy: bool,
 }
 
 impl Default for App {
@@ -57,6 +61,7 @@ impl Default for App {
 
         Self {
             _stream: i1,
+            loopy: false,
             sink: rodio::Sink::try_new(&i2).unwrap(),
             sel_type: SelectionType::All,
             cur_song_path: format!("songs\\{}", songls.get(0).unwrap()),
@@ -92,28 +97,31 @@ impl eframe::App for App {
                         ui.selectable_value(&mut self.sel_type, SelectionType::Song, "Song");
                     }
                 );
+                ui.checkbox(&mut self.loopy, "Loop songs on finish");
+            });
+            ui.horizontal(|ui| {
+                if ui.button("Get").clicked() {
+                    let paths = fs::read_dir("songs\\");
+                    match paths {
+                        Ok(pat) => {
+                        self.songs_list.clear();
+                        for p in pat {
+                            if let Ok(a) = p {
+                                //println!("Pushing {}", a.file_name().into_string().unwrap());
+                                self.songs_list.push(a.file_name().into_string().unwrap());
+                            }
+                        }
+                        },
+                        Err(_) => {
+                            self.songs_list.clear();
+                            self.songs_list.push(format!("Error in fetching Music directory"));
+                        },
+                    }
+                }
                 if ui.button("Shuffle").clicked() {
-
+    
                 }
             });
-            if ui.button("Get").clicked() {
-                let paths = fs::read_dir("songs\\");
-                match paths {
-                    Ok(pat) => {
-                    self.songs_list.clear();
-                    for p in pat {
-                        if let Ok(a) = p {
-                            //println!("Pushing {}", a.file_name().into_string().unwrap());
-                            self.songs_list.push(a.file_name().into_string().unwrap());
-                        }
-                    }
-                    },
-                    Err(_) => {
-                        self.songs_list.clear();
-                        self.songs_list.push(format!("Error in fetching Music directory"));
-                    },
-                }
-            }
             ui.horizontal(|ui| { 
                 ui.vertical(|ui| {
                         let mut i: usize = 0;
@@ -214,17 +222,47 @@ impl eframe::App for App {
                 );
                 ui.spacing_mut().slider_width = og_spacing;
                 
+                
                 if seeker.dragged() {
                     let _ = self.sink.try_seek(Duration::from_millis(self.position));
                     self.start_system = SystemTime::now();
                     self.start_milis = self.position;
+                } else {
+                    if self.sink.empty() {
+                        let fp = format!("songs\\{}", self.songs_list.get(self.cur_song_index).unwrap());
+                        let open_file = File::open(&fp);
+    
+                        if self.loopy {
+                            if let Ok(open_file) = open_file {
+                                let reader = BufReader::new(open_file);
+                                
+                                let elem = rodio::Decoder::new_mp3(reader);
+                                self.error = match elem {
+                                    Ok(a) => {
+                                        self.total_duration = 10000 as u64;
+                                        
+                                        let path = Path::new(&fp);
+                                        self.total_duration = mp3_duration::from_path(&path).unwrap().as_millis() as u64;
+                                        self.sink.stop();
+        
+                                        self.start_system = SystemTime::now();
+                                        self.position = 0;
+                                        self.start_milis = 0;
+        
+                                        self.sink.append(a); 
+                                        format!("")},
+                                    Err(_) => format!("Error in decoding song :("),
+                                }
+                            }
+                            else {
+                                self.error = format!("File not found: {}", &self.cur_song_path);
+                            }
+                        }
+                    }
+                    
                 }
                 if self.position < self.total_duration && !self.sink.is_paused() && !self.sink.empty() {
                     self.position = self.start_system.elapsed().unwrap().as_millis() as u64 + self.start_milis;
-                }
-                if self.sink.empty() {
-                    self.position = 0;
-                    self.total_duration = 1;
                 }
                 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::RIGHT), |ui| {
