@@ -27,7 +27,9 @@ struct App {
     stream_handle: OutputStreamHandle,
     sel_type: SelectionType,
     cur_song_path: String,
+    cur_song_index: usize,
     songs_list: Vec<String>,
+    song_queue: Vec<String>,
     error: String,
     volume: f32,
     start_system: SystemTime,
@@ -61,7 +63,9 @@ impl Default for App {
             stream_handle: i2,
             sel_type: SelectionType::All,
             cur_song_path: format!("songs\\{}", songls.get(0).unwrap()),
+            cur_song_index: 0,
             songs_list: songls,
+            song_queue: Vec::new(),
             error: format!(""),
             volume: 1.0,
             start_system: SystemTime::now(),
@@ -114,14 +118,62 @@ impl eframe::App for App {
                     },
                 }
             }
-            let mut i = 0;
-            for dir in &self.songs_list {
-                ui.horizontal(|ui| {
-                    ui.label(dir);
-                    if ui.button(">>").clicked() {
-                        let fp = format!("songs\\{}", self.songs_list.get(i).unwrap());
-                        let file = File::open(&fp).unwrap();
-                        let reader = BufReader::new(file);
+            ui.horizontal(|ui| { 
+                ui.vertical(|ui| {
+                        let mut i: usize = 0;
+                        for dir in &self.songs_list {
+                        ui.horizontal(|ui| {
+                            ui.label(dir);
+                            if ui.button(">>").clicked() {
+                                self.cur_song_index = i;
+                                let fp = format!("songs\\{}", self.songs_list.get(i).unwrap());
+                                let file = File::open(&fp).unwrap();
+                                let reader = BufReader::new(file);
+                                
+                                let elem = rodio::Decoder::new_mp3(reader);
+                                self.error = match elem {
+                                    Ok(a) => {
+                                        self.total_duration = 10000 as u64;
+                                        
+                                        let path = Path::new(&fp);
+                                        self.total_duration = mp3_duration::from_path(&path).unwrap().as_millis() as u64;
+                                        self.sink.stop();
+        
+                                        self.start_system = SystemTime::now();
+                                        self.position = 0; 
+                                        self.start_milis = 0;
+        
+                                        self.sink.append(a); 
+                                        format!("")},
+                                    Err(_) => format!("Error in decoding song :("),
+                                }
+                            }
+                        });
+                        i += 1;
+                    }
+                    ui.label(&self.error);
+                });
+
+                ui.vertical(|ui| {
+                    
+            });
+                
+            });
+            
+            
+        });
+        
+        egui::TopBottomPanel::bottom("Player").show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(format!("Currently Playing: {}", self.songs_list.get(self.cur_song_index as usize).unwrap()));
+            });
+            ui.horizontal(|ui| {
+                if ui.button("Play").clicked() {
+                    let fp = format!("songs\\{}", self.songs_list.get(self.cur_song_index).unwrap());
+                    let open_file = File::open(&fp);
+
+                    if let Ok(open_file) = open_file {
+                        let reader = BufReader::new(open_file);
                         
                         let elem = rodio::Decoder::new_mp3(reader);
                         self.error = match elem {
@@ -133,31 +185,11 @@ impl eframe::App for App {
                                 self.sink.stop();
 
                                 self.start_system = SystemTime::now();
-                                self.position = 0; 
+                                self.position = 0;
                                 self.start_milis = 0;
 
                                 self.sink.append(a); 
                                 format!("")},
-                            Err(_) => format!("Error in decoding song :("),
-                        }
-                    }
-                });
-                i += 1;
-            }
-            ui.label(&self.error);
-        });
-        
-        egui::TopBottomPanel::bottom("Player").show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                if ui.button("Play").clicked() {
-                    let open_file = File::open(&self.cur_song_path);
-
-                    if let Ok(o) = open_file {
-                        let file = BufReader::new(o);
-
-                        let elem = rodio::Decoder::new(file);
-                        self.error = match elem {
-                            Ok(a) => {self.sink.append(a); format!("")},
                             Err(_) => format!("Error in decoding song :("),
                         }
                     }
@@ -188,11 +220,14 @@ impl eframe::App for App {
                 let og_spacing = ui.spacing().slider_width;
                 let size = ctx.available_rect().size().x - 353.0;
                 ui.spacing_mut().slider_width = size;
+
+                let pos_clone = self.position;
                 
                 let seeker = ui.add(
                     egui::Slider::new(&mut self.position, 0..=self.total_duration)
                     .handle_shape(egui::style::HandleShape::Rect { aspect_ratio: 1.0 })
-                    
+                    .show_value(false)
+                    .text(format!("{}:{}{}", (pos_clone / 1000) / 60, if (pos_clone / 1000) % 60 < 10 {"0"} else {""}, (pos_clone / 1000) % 60))
                 );
                 ui.spacing_mut().slider_width = og_spacing;
                 
@@ -201,8 +236,13 @@ impl eframe::App for App {
                     self.start_system = SystemTime::now();
                     self.start_milis = self.position;
                 }
-                self.position = self.start_system.elapsed().unwrap().as_millis() as u64 + self.start_milis;
-
+                if self.position < self.total_duration && !self.sink.is_paused() && !self.sink.empty() {
+                    self.position = self.start_system.elapsed().unwrap().as_millis() as u64 + self.start_milis;
+                }
+                if self.sink.empty() {
+                    self.position = 0;
+                    self.total_duration = 1;
+                }
                 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::RIGHT), |ui| {
                     let volume_slider = ui.add(egui::Slider::new(&mut self.volume, 0.0..=1.0));
