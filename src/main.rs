@@ -1,8 +1,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")] // hide console window on Windows in release
 
 use eframe::{egui, egui::Visuals};
-use std::{fs::{self, File, Metadata}, io::BufReader, path::Path, str, time::{Duration, SystemTime}};
-use rodio::{decoder, Decoder, OutputStream, OutputStreamHandle, Source, Sink};
+use std::{fs::{self, File}, io::BufReader, path::Path, str, time::{Duration, SystemTime}};
+use rodio::OutputStream;
 use mp3_duration;
 
 fn main() -> Result<(), eframe::Error> {
@@ -13,7 +13,7 @@ fn main() -> Result<(), eframe::Error> {
     eframe::run_native(
         "Dreamer",
         options,
-        Box::new(|cc| {Box::<App>::default()}),
+        Box::new(|_cc| {Box::<App>::default()}),
     )
 }
 
@@ -23,20 +23,18 @@ enum SelectionType {All,Artist,Song}
 
 struct App {
     sink: rodio::Sink,
-    _stream: OutputStream,
-    stream_handle: OutputStreamHandle,
+    _stream: OutputStream, // THIS HAS TO EXIST otherwise the lifetime causes the program to crash
     sel_type: SelectionType,
     cur_song_path: String,
     cur_song_index: usize,
     songs_list: Vec<String>,
-    song_queue: Vec<String>,
+    song_queue: Vec<String>, // TODO: Implement
     error: String,
     volume: f32,
     start_system: SystemTime,
     start_milis: u64,
     position: u64,
     total_duration: u64,
-    decoder: Option<Decoder<BufReader<File>>>,
 }
 
 impl Default for App {
@@ -60,7 +58,6 @@ impl Default for App {
         Self {
             _stream: i1,
             sink: rodio::Sink::try_new(&i2).unwrap(),
-            stream_handle: i2,
             sel_type: SelectionType::All,
             cur_song_path: format!("songs\\{}", songls.get(0).unwrap()),
             cur_song_index: 0,
@@ -72,7 +69,6 @@ impl Default for App {
             total_duration: 0,
             start_milis: 0,
             position: 0,
-            decoder: None,
         }
     }
 }
@@ -154,9 +150,7 @@ impl eframe::App for App {
                     ui.label(&self.error);
                 });
 
-                ui.vertical(|ui| {
-                    
-            });
+                // TODO: Add song queue
                 
             });
             
@@ -205,18 +199,7 @@ impl eframe::App for App {
                 if ui.button("Kill").clicked() {
                     self.sink.skip_one();
                 }
-
-                let milis = match self.start_system.elapsed() {
-                    Ok(elapsed) => elapsed.as_millis() as u64 + self.start_milis,
-                    Err(_) => 0,
-                };
                 
-                //let mut total_len = match &self.decoder {
-                //    Some(a) => {self.start_system = SystemTime::now(); a.total_duration().unwrap()},
-                //    None => {Duration::from_millis(0)},
-                //};
-
-                //let mut total = total_len.as_millis() as u64;
                 let og_spacing = ui.spacing().slider_width;
                 let size = ctx.available_rect().size().x - 353.0;
                 ui.spacing_mut().slider_width = size;
