@@ -2,7 +2,7 @@
 
 use eframe::{egui, egui::Visuals};
 use std::{fs::{self, File}, io::BufReader, path::Path, str, time::{Duration, SystemTime}};
-use rodio::OutputStream;
+use rodio::{OutputStream, Source};
 
 // This is a really stupid dependency but as it turns out I guess this is a non-trivial problem???
 // Rodio's built in functionality for this just doesn't work most of the time for some reason.
@@ -32,6 +32,7 @@ struct App {
 	cur_song_index: usize,
 	songs_list: Vec<String>,
 	song_queue: Vec<String>, // TODO: Implement
+	search_text: String,
 	error: String,
 	volume: f32,
 	start_system: SystemTime,
@@ -68,6 +69,7 @@ impl Default for App {
 			cur_song_index: 0,
 			songs_list: songls,
 			song_queue: Vec::new(),
+			search_text: format!(""),
 			error: format!(""),
 			volume: 1.0,
 			start_system: SystemTime::now(),
@@ -119,11 +121,22 @@ impl eframe::App for App {
 				if ui.button("Shuffle").clicked() {
 	
 				}
+				ui.add(egui::TextEdit::singleline(&mut self.search_text));
 			});
-			ui.horizontal(|ui| { 
-				ui.vertical(|ui| {
-					let mut song_change_triggered = false;
-					for (index, dir) in (&mut self.songs_list).into_iter().enumerate() {
+			egui::ScrollArea::vertical().show(ui, |ui| {
+				let mut song_change_triggered = false;
+				for (index, dir) in (&mut self.songs_list).into_iter().enumerate() {
+					if self.search_text.len() != 0 {
+						if dir.to_ascii_lowercase().contains(&self.search_text) {
+							ui.horizontal(|ui| {
+								ui.label(dir.clone());
+								if ui.button(">>").clicked() {
+									song_change_triggered = true;
+									self.cur_song_index = index;
+								}
+							});
+						}
+					} else {
 						ui.horizontal(|ui| {
 							ui.label(dir.clone());
 							if ui.button(">>").clicked() {
@@ -132,26 +145,33 @@ impl eframe::App for App {
 							}
 						});
 					}
-					if song_change_triggered {
-						let item = &self.songs_list.get(self.cur_song_index).unwrap();
-						let fp = format!("songs\\{}", item);
-						let file = File::open(&fp).unwrap();
+				}
+				if song_change_triggered {
+					let item = &self.songs_list.get(self.cur_song_index).unwrap();
+					let fp = format!("songs\\{}", item);
+					let file = File::open(&fp).unwrap();
 
-						let reader = BufReader::new(file);
+					let reader = BufReader::new(file);
 
-						self.error = play_song(self, reader, &fp);
-						ui.label(&self.error);
-					}
-				});
+					self.error = play_song(self, reader, &fp);
+					
+				}
+				ui.label("");
+			});
+					
 
 				// TODO: Add song queue
 				
 			});
-		});
 		
 		egui::TopBottomPanel::bottom("Player").show(ctx, |ui| {
 			ui.horizontal(|ui| {
 				ui.label(format!("Currently Playing: {}", self.songs_list.get(self.cur_song_index as usize).unwrap()));
+				
+				ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+					ui.label(&self.error)
+				});
+				
 			});
 			ui.horizontal(|ui| {
 				if ui.button("Play").clicked() {
@@ -232,6 +252,17 @@ fn play_song(app: &mut App, reader: BufReader<File>, fp: &str) -> String {
 	match elem {
 		Ok(a) => {
 			let path = Path::new(&fp);
+			let path_test = mp3_duration::from_path(&path);
+			if let Ok(path_test) = path_test {
+				app.total_duration = path_test.as_millis() as u64;
+			} else {
+				let t = a.total_duration();
+				if let Some(t) = t {
+					app.total_duration = t.as_millis() as u64;
+				} else {
+					return format!("Error - Couldn't determine song length");
+				}
+			}
 			app.total_duration = mp3_duration::from_path(&path).unwrap().as_millis() as u64;
 			app.sink.stop();
 
