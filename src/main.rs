@@ -52,7 +52,6 @@ struct App {
 	cur_song_path: String,
 	cur_song_index: usize,
 	songs_list: Vec<String>,
-	song_queue: Vec<String>, // TODO: Implement
 	search_text: String,
 	error: String,
 	volume: f32,
@@ -91,7 +90,6 @@ impl Default for App {
 			cur_song_path: format!("songs\\{}", songls.get(0).unwrap()),
 			cur_song_index: 0,
 			songs_list: songls,
-			song_queue: Vec::new(),
 			search_text: format!(""),
 			error: format!(""),
 			volume: 1.0,
@@ -213,12 +211,7 @@ impl eframe::App for App {
 					}
 				});
 			});
-			
-					
-
-				// TODO: Add song queue
-				
-			});
+		});
 		
 		egui::TopBottomPanel::bottom("Player").show(ctx, |ui| {
 			ui.horizontal(|ui| {
