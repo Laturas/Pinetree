@@ -1,7 +1,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")] // hide console window on Windows in release
 
 use eframe::{egui, egui::Visuals};
-use std::{fs::{self, File}, io::BufReader, path::Path, str, time::{Duration, SystemTime}};
+//use egui::ahash::HashMap;
+use std::{fs::{self, File}, collections::HashMap, io::BufReader, path::Path, str, time::{Duration, SystemTime}};
 use rodio::{OutputStream, Source};
 
 // This is a really stupid dependency but as it turns out I guess this is a non-trivial problem???
@@ -10,7 +11,7 @@ use mp3_duration;
 
 fn main() -> Result<(), eframe::Error> {
 	let options = eframe::NativeOptions {
-		viewport: egui::ViewportBuilder::default().with_inner_size([690.0, 320.0]),
+		viewport: egui::ViewportBuilder::default().with_inner_size([690.0, 340.0]),
 		..Default::default()
 	};
 	eframe::run_native(
@@ -18,6 +19,26 @@ fn main() -> Result<(), eframe::Error> {
 		options,
 		Box::new(|_cc| {Box::<App>::default()}),
 	)
+}
+
+//static mut DATA: Vec<(String, String)> = Vec::new();
+
+struct SongInfo {
+	name: String,
+	artist: String,
+	genre: String,
+	nodisplay_time_listened: u64,
+}
+
+impl Default for SongInfo {
+	fn default() -> Self {
+		Self {
+			name: format!(""),
+			artist: format!(""),
+			genre: format!(""),
+			nodisplay_time_listened: 0,
+		}
+	}
 }
 
 #[derive(PartialEq)]
@@ -40,6 +61,7 @@ struct App {
 	position: u64,
 	total_duration: u64,
 	loopy: bool,
+	current_song_info: SongInfo,
 }
 
 impl Default for App {
@@ -76,6 +98,7 @@ impl Default for App {
 			total_duration: 0,
 			start_milis: 0,
 			position: 0,
+			current_song_info: SongInfo::default(),
 		}
 	}
 }
@@ -123,41 +146,74 @@ impl eframe::App for App {
 				}
 				ui.add(egui::TextEdit::singleline(&mut self.search_text));
 			});
-			egui::ScrollArea::vertical().show(ui, |ui| {
-				let mut song_change_triggered = false;
-				for (index, dir) in (&mut self.songs_list).into_iter().enumerate() {
-					if self.search_text.len() != 0 {
-						if dir.to_ascii_lowercase().contains(&self.search_text) {
-							ui.horizontal(|ui| {
-								ui.label(dir.clone());
-								if ui.button(">>").clicked() {
-									song_change_triggered = true;
-									self.cur_song_index = index;
+			ui.add_space(10.0);
+			ui.horizontal(|ui| {
+				ui.set_min_height(200.0);
+				ui.vertical(|ui| {
+					egui::ScrollArea::vertical().show(ui, |ui| {
+						ui.set_max_width(275.0);
+						ui.set_min_width(275.0);
+						let mut song_change_triggered = false;
+						for (index, dir) in (&mut self.songs_list).into_iter().enumerate() {
+							if self.search_text.len() != 0 {
+								if dir.to_ascii_lowercase().contains(&self.search_text) {
+									ui.horizontal(|ui| {
+										ui.label(dir.clone());
+										if ui.button(">>").clicked() {
+											song_change_triggered = true;
+											self.cur_song_index = index;
+										}
+									});
 								}
-							});
-						}
-					} else {
-						ui.horizontal(|ui| {
-							ui.label(dir.clone());
-							if ui.button(">>").clicked() {
-								song_change_triggered = true;
-								self.cur_song_index = index;
+							} else {
+								ui.horizontal(|ui| {
+									ui.label(dir.clone());
+									if ui.button(">>").clicked() {
+										song_change_triggered = true;
+										self.cur_song_index = index;
+									}
+								});
 							}
-						});
+						}
+						if song_change_triggered {
+							let item = &self.songs_list.get(self.cur_song_index).unwrap();
+							let fp = format!("songs\\{}", item);
+							let file = File::open(&fp).unwrap();
+		
+							let reader = BufReader::new(file);
+		
+							self.error = play_song(self, reader, &fp);
+							
+						}
+					});
+				}); 
+				
+				ui.vertical(|ui| {
+					ui.set_max_width(200.0);
+					ui.vertical_centered(|ui| {
+						ui.heading("Song Info");
+					});
+					ui.horizontal(|ui| {
+						let song_label = ui.label("Song");
+						ui.text_edit_singleline(&mut self.current_song_info.name).labelled_by(song_label.id);
+					});
+					ui.horizontal(|ui| {
+						let artist_label = ui.label("Artist");
+						ui.text_edit_singleline(&mut self.current_song_info.artist).labelled_by(artist_label.id);
+					});
+					ui.horizontal(|ui| {
+						let genre_label = ui.label("Genre");
+						ui.text_edit_singleline(&mut self.current_song_info.genre).labelled_by(genre_label.id);
+					});
+					if ui.button("Save").clicked() {
+						let current_s = self.songs_list.get(self.cur_song_index).unwrap();
+
+						let data = format!("{},{},{},{},{}\n", current_s, self.current_song_info.name, self.current_song_info.artist, self.current_song_info.genre, self.current_song_info.nodisplay_time_listened);
+						fs::write("data.csv", data).expect("Unable to write file");
 					}
-				}
-				if song_change_triggered {
-					let item = &self.songs_list.get(self.cur_song_index).unwrap();
-					let fp = format!("songs\\{}", item);
-					let file = File::open(&fp).unwrap();
-
-					let reader = BufReader::new(file);
-
-					self.error = play_song(self, reader, &fp);
-					
-				}
-				ui.label("");
+				});
 			});
+			
 					
 
 				// TODO: Add song queue
