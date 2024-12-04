@@ -2,7 +2,7 @@
 
 use eframe::{egui, egui::Visuals};
 //use egui::ahash::HashMap;
-use std::{fs::{self, File}, collections::HashMap, io::BufReader, path::Path, str, time::{Duration, SystemTime}};
+use std::{collections::HashMap, fs::{self, File, OpenOptions}, io::BufReader, io::Write, path::Path, str, time::{Duration, SystemTime}};
 use rodio::{OutputStream, Source};
 
 // This is a really stupid dependency but as it turns out I guess this is a non-trivial problem???
@@ -62,6 +62,7 @@ struct App {
 	total_duration: u64,
 	loopy: bool,
 	current_song_info: SongInfo,
+	dat_map: HashMap<String, String>,
 }
 
 impl Default for App {
@@ -99,6 +100,7 @@ impl Default for App {
 			start_milis: 0,
 			position: 0,
 			current_song_info: SongInfo::default(),
+			dat_map: HashMap::new(),
 		}
 	}
 }
@@ -206,10 +208,8 @@ impl eframe::App for App {
 						ui.text_edit_singleline(&mut self.current_song_info.genre).labelled_by(genre_label.id);
 					});
 					if ui.button("Save").clicked() {
-						let current_s = self.songs_list.get(self.cur_song_index).unwrap();
-
-						let data = format!("{},{},{},{},{}\n", current_s, self.current_song_info.name, self.current_song_info.artist, self.current_song_info.genre, self.current_song_info.nodisplay_time_listened);
-						fs::write("data.csv", data).expect("Unable to write file");
+						save_data(&self.current_song_info, &mut self.dat_map,
+								  &self.songs_list, 	 		self.cur_song_index);
 					}
 				});
 			});
@@ -329,5 +329,21 @@ fn play_song(app: &mut App, reader: BufReader<File>, fp: &str) -> String {
 			app.sink.append(a); 
 			format!("")},
 		Err(_) => format!("Error in decoding song :("),
+	}
+}
+
+fn save_data(current_song_info: &SongInfo, dat_map: &mut HashMap<String, String>, songs_list: &Vec<String>, cur_song_index: usize) {
+	let current_s = songs_list.get(cur_song_index).unwrap();
+	let data = format!("{},{},{},{},{}", current_s, current_song_info.name, current_song_info.artist, current_song_info.genre, current_song_info.nodisplay_time_listened);
+	
+	dat_map.insert(current_s.clone(), data);
+	fs::write("data.csv", "").expect("Unable to write file");
+
+	for keys in dat_map.keys() {
+		let mut f = OpenOptions::new()
+			.append(true)
+			.open("data.csv")
+			.unwrap();
+		let _ = writeln!(f, "{}", dat_map.get(keys).unwrap()).is_ok();
 	}
 }
