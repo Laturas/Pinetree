@@ -2,7 +2,7 @@
 
 use eframe::{egui, egui::Visuals};
 //use egui::ahash::HashMap;
-use std::{collections::HashMap, fs::{self, File, OpenOptions}, io::BufReader, io::Write, path::Path, str, time::{Duration, SystemTime}};
+use std::{collections::HashMap, fs::{self, File, OpenOptions}, io::{BufRead, BufReader, Write}, path::Path, str, time::{Duration, SystemTime}};
 use rodio::{OutputStream, Source};
 
 // This is a really stupid dependency but as it turns out I guess this is a non-trivial problem???
@@ -27,7 +27,7 @@ struct SongInfo {
 	name: String,
 	artist: String,
 	genre: String,
-	nodisplay_time_listened: u64,
+	nodisplay_time_listened: u128,
 }
 
 impl Default for SongInfo {
@@ -69,6 +69,10 @@ impl Default for App {
 		let (i1, i2) = OutputStream::try_default().unwrap();
 		let mut songls: Vec<String> = vec![];
 		let paths = fs::read_dir("songs\\");
+		let mut data_map: HashMap<String,String> = HashMap::new();
+
+		initialize_data_map(&mut data_map);
+
 		match paths {
 			Ok(pat) => for p in pat {
 				songls.clear();
@@ -98,7 +102,7 @@ impl Default for App {
 			start_milis: 0,
 			position: 0,
 			current_song_info: SongInfo::default(),
-			dat_map: HashMap::new(),
+			dat_map: data_map,
 		}
 	}
 }
@@ -179,11 +183,19 @@ impl eframe::App for App {
 							let item = &self.songs_list.get(self.cur_song_index).unwrap();
 							let fp = format!("songs\\{}", item);
 							let file = File::open(&fp).unwrap();
+							let map_data = self.dat_map.get(*item);
+
+							if let Some(map_data) = map_data {
+								let collection = map_data.split(',').collect::<Vec<&str>>();
+
+								self.current_song_info.name = (**collection.get(1).unwrap()).to_string();
+								self.current_song_info.artist = (**collection.get(2).unwrap()).to_string();
+								self.current_song_info.genre = (**collection.get(3).unwrap()).to_string();
+							}
 		
 							let reader = BufReader::new(file);
 		
 							self.error = play_song(self, reader, &fp);
-							
 						}
 					});
 				}); 
@@ -338,5 +350,23 @@ fn save_data(current_song_info: &SongInfo, dat_map: &mut HashMap<String, String>
 			.open("data.csv")
 			.unwrap();
 		let _ = writeln!(f, "{}", dat_map.get(keys).unwrap()).is_ok();
+	}
+}
+
+fn initialize_data_map(data_map: &mut HashMap<String,String>) {
+	let fp = format!("data.csv");
+	let file = File::open(&fp);
+
+	if let Ok(file) = file {
+		let reader = BufReader::new(file);
+		for line in reader.lines() {
+			let unwrapped_line = line.unwrap();
+			let unw_clone = unwrapped_line.clone();
+			let collection = unwrapped_line.split(',').collect::<Vec<&str>>();
+	
+			let key = (**collection.get(0).unwrap()).to_string();
+
+			data_map.insert(key, unw_clone);
+		}
 	}
 }
