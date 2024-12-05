@@ -294,6 +294,12 @@ impl eframe::App for App {
 						if self.loopy {
 							if let Ok(open_file) = open_file {
 								let reader = BufReader::new(open_file);
+
+								self.current_song_info.nodisplay_time_listened += self.start_system.elapsed().unwrap().as_millis();
+								save_data_noinsert(
+									&self.current_song_info, &mut self.dat_map,
+									&self.songs_list, 	 	 self.cur_song_index
+								);
 								
 								self.error = play_song(self, reader, &fp);
 							}
