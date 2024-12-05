@@ -191,6 +191,7 @@ impl eframe::App for App {
 								self.current_song_info.name = (**collection.get(1).unwrap()).to_string();
 								self.current_song_info.artist = (**collection.get(2).unwrap()).to_string();
 								self.current_song_info.genre = (**collection.get(3).unwrap()).to_string();
+								self.current_song_info.nodisplay_time_listened = (**collection.get(4).unwrap()).to_string().parse().unwrap();
 							}
 		
 							let reader = BufReader::new(file);
@@ -250,7 +251,15 @@ impl eframe::App for App {
 				}
 				match self.sink.is_paused() {
 					true => if ui.button("Unpause").clicked() {self.sink.play(); self.start_system = SystemTime::now();},
-					false => if ui.button("Pause").clicked() {self.sink.pause(); self.start_milis = self.position;},
+					false => if ui.button("Pause").clicked() {
+						self.sink.pause();
+						self.current_song_info.nodisplay_time_listened += self.start_system.elapsed().unwrap().as_millis();
+						save_data_noinsert(
+							&self.current_song_info, &mut self.dat_map,
+							&self.songs_list, 	 	 self.cur_song_index
+						);
+						self.start_milis = self.position;
+					},
 				}
 				
 				if ui.button("Kill").clicked() {
@@ -274,6 +283,7 @@ impl eframe::App for App {
 				// This is to prevent an issue that would cause an infinite loop somehow
 				if seeker.dragged() {
 					let _ = self.sink.try_seek(Duration::from_millis(self.position));
+					self.current_song_info.nodisplay_time_listened += self.start_system.elapsed().unwrap().as_millis();
 					self.start_system = SystemTime::now();
 					self.start_milis = self.position;
 				} else {
@@ -327,6 +337,13 @@ fn play_song(app: &mut App, reader: BufReader<File>, fp: &str) -> String {
 			app.total_duration = mp3_duration::from_path(&path).unwrap().as_millis() as u64;
 			app.sink.stop();
 
+			if !app.sink.is_paused() && !app.sink.empty() {
+				app.current_song_info.nodisplay_time_listened += app.start_system.elapsed().unwrap().as_millis();
+				save_data_noinsert(
+					&app.current_song_info, &mut app.dat_map,
+					&app.songs_list, 	 	 app.cur_song_index
+				);
+			}
 			app.start_system = SystemTime::now();
 			app.position = 0;
 			app.start_milis = 0;
@@ -334,6 +351,26 @@ fn play_song(app: &mut App, reader: BufReader<File>, fp: &str) -> String {
 			app.sink.append(a); 
 			format!("")},
 		Err(_) => format!("Error in decoding song :("),
+	}
+}
+
+fn save_data_noinsert(current_song_info: &SongInfo, dat_map: &mut HashMap<String, String>, songs_list: &Vec<String>, cur_song_index: usize) {
+	let current_s = songs_list.get(cur_song_index).unwrap();
+	let data = format!("{},{},{},{},{}", current_s, current_song_info.name, current_song_info.artist, current_song_info.genre, current_song_info.nodisplay_time_listened);
+	
+	if dat_map.contains_key(current_s) {
+		dat_map.insert(current_s.clone(), data);
+	} else {
+		return;
+	}
+	fs::write("data.csv", "").expect("Unable to write file");
+
+	for keys in dat_map.keys() {
+		let mut f = OpenOptions::new()
+			.append(true)
+			.open("data.csv")
+			.unwrap();
+		let _ = writeln!(f, "{}", dat_map.get(keys).unwrap()).is_ok();
 	}
 }
 
