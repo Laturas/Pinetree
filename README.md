@@ -11,6 +11,7 @@ Right now it may not be the most user-friendly, because I built it originally ju
 - Either fix the initial getting of the song list, or disable it entirely
 - Remove dead and/or useless ui components
 - Add tooltips
+- Bold currently playing song
 ### Bugfixes
 - Allow song looping while minimized
 - When refreshing the song list, update the song ID for the currently playing song
