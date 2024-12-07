@@ -305,44 +305,58 @@ impl eframe::App for App {
 							}
 						}
 						if self.sel_type == SelectionType::Next {
+							self.current_song_info.nodisplay_time_listened += self.start_system.elapsed().unwrap().as_millis();
+							save_data_noinsert(
+								&self.current_song_info, &mut self.dat_map,
+								&self.songs_list, 	 	 self.cur_song_index
+							);
+
 							self.cur_song_index = if self.cur_song_index + 1 >= self.songs_list.len() {0} else {self.cur_song_index + 1};
+							
+							let item = &self.songs_list.get(self.cur_song_index).unwrap();
+							let fp = format!("songs\\{}", item);
+							let file = File::open(&fp).unwrap();
+							let map_data = self.dat_map.get(*item);
 
-							let fp = format!("songs\\{}", self.songs_list.get(self.cur_song_index).unwrap());
-							let open_file = File::open(&fp);
-							if let Ok(open_file) = open_file {
-								let reader = BufReader::new(open_file);
+							if let Some(map_data) = map_data {
+								let collection = map_data.split(',').collect::<Vec<&str>>();
 
-								self.current_song_info.nodisplay_time_listened += self.start_system.elapsed().unwrap().as_millis();
-								save_data_noinsert(
-									&self.current_song_info, &mut self.dat_map,
-									&self.songs_list, 	 	 self.cur_song_index
-								);
-								
-								self.error = play_song(self, reader, &fp);
+								self.current_song_info.name = (**collection.get(1).unwrap()).to_string();
+								self.current_song_info.artist = (**collection.get(2).unwrap()).to_string();
+								self.current_song_info.genre = (**collection.get(3).unwrap()).to_string();
+								self.current_song_info.nodisplay_time_listened = (**collection.get(4).unwrap()).to_string().parse().unwrap();
 							}
-							else {
-								self.error = format!("File not found: {}", &self.cur_song_path);
-							}
+		
+							let reader = BufReader::new(file);
+		
+							self.error = play_song(self, reader, &fp);
 						}
 						if self.sel_type == SelectionType::Random {
+							self.current_song_info.nodisplay_time_listened += self.start_system.elapsed().unwrap().as_millis();
+							save_data_noinsert(
+								&self.current_song_info, &mut self.dat_map,
+								&self.songs_list, 	 	 self.cur_song_index
+							);
+
 							self.cur_song_index = rand::thread_rng().gen_range(0..self.songs_list.len());
 
-							let fp = format!("songs\\{}", self.songs_list.get(self.cur_song_index).unwrap());
-							let open_file = File::open(&fp);
-							if let Ok(open_file) = open_file {
-								let reader = BufReader::new(open_file);
+							let item = &self.songs_list.get(self.cur_song_index).unwrap();
+							let fp = format!("songs\\{}", item);
+							let file = File::open(&fp).unwrap();
+							let map_data = self.dat_map.get(*item);
 
-								self.current_song_info.nodisplay_time_listened += self.start_system.elapsed().unwrap().as_millis();
-								save_data_noinsert(
-									&self.current_song_info, &mut self.dat_map,
-									&self.songs_list, 	 	 self.cur_song_index
-								);
-								
-								self.error = play_song(self, reader, &fp);
+							if let Some(map_data) = map_data {
+								let collection = map_data.split(',').collect::<Vec<&str>>();
+
+								self.current_song_info.name = (**collection.get(1).unwrap()).to_string();
+								self.current_song_info.artist = (**collection.get(2).unwrap()).to_string();
+								self.current_song_info.genre = (**collection.get(3).unwrap()).to_string();
+								self.current_song_info.nodisplay_time_listened = (**collection.get(4).unwrap()).to_string().parse().unwrap();
 							}
-							else {
-								self.error = format!("File not found: {}", &self.cur_song_path);
-							}
+		
+							let reader = BufReader::new(file);
+		
+							self.error = play_song(self, reader, &fp);	
 						}
 					}
 				}
