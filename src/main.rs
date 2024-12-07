@@ -160,7 +160,7 @@ impl eframe::App for App {
 						let mut song_change_triggered = false;
 						for (index, dir) in (&mut self.songs_list).into_iter().enumerate() {
 							if self.search_text.len() != 0 {
-								if dir.to_ascii_lowercase().contains(&self.search_text) {
+								if dir.to_ascii_lowercase().contains(&self.search_text.to_ascii_lowercase()) {
 									ui.horizontal(|ui| {
 										ui.label(dir.clone());
 										if ui.button("▶").clicked() {

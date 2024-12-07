@@ -15,7 +15,7 @@ Right now it may not be the most user-friendly, because I built it originally ju
 ### Bugfixes
 - Allow song looping while minimized
 - When refreshing the song list, update the song ID for the currently playing song
-- Fix searching breaking when typing capital letters
+- \[FIXED\] Fix searching breaking when typing capital letters
 - Add broader support for non-ascii characters (Unlikely to fix. This could be very difficult)
 ### Features
 - Allow song grouping into folders
