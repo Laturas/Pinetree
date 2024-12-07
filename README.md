@@ -8,15 +8,21 @@ Right now it may not be the most user-friendly, because I built it originally ju
 - Limit the window resizing capability
 - Add a "saved successfully" text upon successful save
 - Add a warning for when a song doesn't have any saved data associated with it
+- Either fix the initial getting of the song list, or disable it entirely
+- Remove dead and/or useless ui components
+- Add tooltips
 ### Bugfixes
 - Allow song looping while minimized
 - When refreshing the song list, update the song ID for the currently playing song
 - Fix searching breaking when typing capital letters
+- Add broader support for non-ascii characters (Unlikely to fix. This could be very difficult)
 ### Features
 - Allow song grouping into folders
 - Create shuffle feature and in-order playing
+- Maybe add speeding up/slowing down of audio?
 ### Optimization
 - Cache text-rendering results to reduce CPU usage
 	- (Honestly that's the only real thing that would really benefit from being optimized, imo)
 ### Other
 - Create a user manual/documentation
+- Make a download page
