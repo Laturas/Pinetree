@@ -4,6 +4,7 @@ use eframe::{egui, egui::Visuals};
 //use egui::ahash::HashMap;
 use std::{collections::HashMap, fs::{self, File, OpenOptions}, io::{BufRead, BufReader, Write}, path::Path, str, time::{Duration, SystemTime}};
 use rodio::{OutputStream, Source};
+use rand::Rng;
 
 // This is a really stupid dependency but as it turns out I guess this is a non-trivial problem???
 // Rodio's built in functionality for this just doesn't work most of the time for some reason.
@@ -11,7 +12,7 @@ use mp3_duration;
 
 fn main() -> Result<(), eframe::Error> {
 	let options = eframe::NativeOptions {
-		viewport: egui::ViewportBuilder::default().with_inner_size([690.0, 340.0]),
+		viewport: egui::ViewportBuilder::default().with_inner_size([690.0, 360.0]),
 		..Default::default()
 	};
 	eframe::run_native(
@@ -43,7 +44,7 @@ impl Default for SongInfo {
 
 #[derive(PartialEq)]
 #[derive(Debug)]
-enum SelectionType {All,Artist,Song}
+enum SelectionType {None,Loop,Random,Next}
 
 struct App {
 	sink: rodio::Sink,
@@ -59,7 +60,6 @@ struct App {
 	start_milis: u64,
 	position: u64,
 	total_duration: u64,
-	loopy: bool,
 	current_song_info: SongInfo,
 	dat_map: HashMap<String, String>,
 }
@@ -88,9 +88,8 @@ impl Default for App {
 
 		Self {
 			_stream: i1,
-			loopy: false,
 			sink: rodio::Sink::try_new(&i2).unwrap(),
-			sel_type: SelectionType::All,
+			sel_type: SelectionType::None,
 			cur_song_path: format!("songs\\{}", songls.get(0).unwrap()),
 			cur_song_index: 0,
 			songs_list: songls,
@@ -114,20 +113,22 @@ impl eframe::App for App {
 		ctx.set_pixels_per_point(1.33);
 
 		egui::CentralPanel::default().show(ctx, |ui| {
+			ui.heading("Kate's Untitled MP3 Player");
 			ui.horizontal(|ui| {
-				ui.heading("Songs");
+				ui.label("When a song ends: ");
 				egui::ComboBox::from_label("")
 					.selected_text(format!("{:?}", self.sel_type))
 					.show_ui(ui, |ui| {
-						ui.selectable_value(&mut self.sel_type, SelectionType::All, "All");
-						ui.selectable_value(&mut self.sel_type, SelectionType::Artist, "Artist");
-						ui.selectable_value(&mut self.sel_type, SelectionType::Song, "Song");
+						ui.selectable_value(&mut self.sel_type, SelectionType::None, "None");
+						ui.selectable_value(&mut self.sel_type, SelectionType::Loop, "Loop");
+						ui.selectable_value(&mut self.sel_type, SelectionType::Random, "Random");
+						ui.selectable_value(&mut self.sel_type, SelectionType::Next, "Next");
 					}
 				);
-				ui.checkbox(&mut self.loopy, "Loop songs on finish");
+				//ui.checkbox(&mut self.loopy, "Loop songs on finish");
 			});
 			ui.horizontal(|ui| {
-				if ui.button("Get").clicked() {
+				if ui.button("Refresh").clicked() {
 					
 					self.songs_list.clear();
 
@@ -145,10 +146,7 @@ impl eframe::App for App {
 						},
 					}
 				}
-				if ui.button("Shuffle").clicked() {
-	
-				}
-				ui.add(egui::TextEdit::singleline(&mut self.search_text));
+				ui.add(egui::TextEdit::singleline(&mut self.search_text).hint_text("Search..."));
 			});
 			ui.add_space(10.0);
 			ui.horizontal(|ui| {
@@ -262,7 +260,7 @@ impl eframe::App for App {
 					},
 				}
 				
-				if ui.button("Kill").clicked() {
+				if ui.button("Stop").clicked() {
 					self.sink.skip_one();
 				}
 				
@@ -288,10 +286,49 @@ impl eframe::App for App {
 					self.start_milis = self.position;
 				} else {
 					if self.sink.empty() {
-						let fp = format!("songs\\{}", self.songs_list.get(self.cur_song_index).unwrap());
-						let open_file = File::open(&fp);
-	
-						if self.loopy {
+						if self.sel_type == SelectionType::Loop {
+							let fp = format!("songs\\{}", self.songs_list.get(self.cur_song_index).unwrap());
+							let open_file = File::open(&fp);
+							if let Ok(open_file) = open_file {
+								let reader = BufReader::new(open_file);
+
+								self.current_song_info.nodisplay_time_listened += self.start_system.elapsed().unwrap().as_millis();
+								save_data_noinsert(
+									&self.current_song_info, &mut self.dat_map,
+									&self.songs_list, 	 	 self.cur_song_index
+								);
+								
+								self.error = play_song(self, reader, &fp);
+							}
+							else {
+								self.error = format!("File not found: {}", &self.cur_song_path);
+							}
+						}
+						if self.sel_type == SelectionType::Next {
+							self.cur_song_index = if self.cur_song_index + 1 >= self.songs_list.len() {0} else {self.cur_song_index + 1};
+
+							let fp = format!("songs\\{}", self.songs_list.get(self.cur_song_index).unwrap());
+							let open_file = File::open(&fp);
+							if let Ok(open_file) = open_file {
+								let reader = BufReader::new(open_file);
+
+								self.current_song_info.nodisplay_time_listened += self.start_system.elapsed().unwrap().as_millis();
+								save_data_noinsert(
+									&self.current_song_info, &mut self.dat_map,
+									&self.songs_list, 	 	 self.cur_song_index
+								);
+								
+								self.error = play_song(self, reader, &fp);
+							}
+							else {
+								self.error = format!("File not found: {}", &self.cur_song_path);
+							}
+						}
+						if self.sel_type == SelectionType::Random {
+							self.cur_song_index = rand::thread_rng().gen_range(0..self.songs_list.len());
+
+							let fp = format!("songs\\{}", self.songs_list.get(self.cur_song_index).unwrap());
+							let open_file = File::open(&fp);
 							if let Ok(open_file) = open_file {
 								let reader = BufReader::new(open_file);
 

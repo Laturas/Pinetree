@@ -999,6 +999,7 @@ dependencies = [
  "eframe",
  "egui",
  "mp3-duration",
+ "rand",
  "rodio",
 ]
 

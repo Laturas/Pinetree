@@ -9,9 +9,10 @@ Right now it may not be the most user-friendly, because I built it originally ju
 - Add a "saved successfully" text upon successful save
 - Add a warning for when a song doesn't have any saved data associated with it
 - Either fix the initial getting of the song list, or disable it entirely
-- Remove dead and/or useless ui components
+- \[DONE\] Remove dead and/or useless ui components
 - Add tooltips
 - Bold currently playing song
+- \[DONE\] Add greyed out text to search box when empty
 ### Bugfixes
 - Allow song looping while minimized
 - When refreshing the song list, update the song ID for the currently playing song
@@ -19,7 +20,7 @@ Right now it may not be the most user-friendly, because I built it originally ju
 - Add broader support for non-ascii characters (Unlikely to fix. This could be very difficult)
 ### Features
 - Allow song grouping into folders
-- Create shuffle feature and in-order playing
+- \[ADDED\] Create shuffle feature and in-order playing
 - Maybe add speeding up/slowing down of audio?
 ### Optimization
 - Cache text-rendering results to reduce CPU usage
