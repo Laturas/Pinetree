@@ -190,6 +190,8 @@ impl eframe::App for App {
 								self.current_song_info.artist = (**collection.get(2).unwrap()).to_string();
 								self.current_song_info.genre = (**collection.get(3).unwrap()).to_string();
 								self.current_song_info.nodisplay_time_listened = (**collection.get(4).unwrap()).to_string().parse().unwrap();
+							} else {
+								self.current_song_info.nodisplay_time_listened = 0;
 							}
 		
 							let reader = BufReader::new(file);
@@ -249,7 +251,7 @@ impl eframe::App for App {
 					}
 				}
 				match self.sink.is_paused() {
-					true => if ui.button("Unpause").clicked() {self.sink.play(); self.start_system = SystemTime::now();},
+					true => if ui.button("Unpause").clicked() {self.sink.play(); self.start_system = SystemTime::now()},
 					false => if ui.button("Pause").clicked() {
 						self.sink.pause();
 						self.current_song_info.nodisplay_time_listened += self.start_system.elapsed().unwrap().as_millis();
@@ -327,6 +329,8 @@ impl eframe::App for App {
 								self.current_song_info.artist = (**collection.get(2).unwrap()).to_string();
 								self.current_song_info.genre = (**collection.get(3).unwrap()).to_string();
 								self.current_song_info.nodisplay_time_listened = (**collection.get(4).unwrap()).to_string().parse().unwrap();
+							} else {
+								self.current_song_info.nodisplay_time_listened = 0;
 							}
 		
 							let reader = BufReader::new(file);
@@ -355,6 +359,8 @@ impl eframe::App for App {
 								self.current_song_info.artist = (**collection.get(2).unwrap()).to_string();
 								self.current_song_info.genre = (**collection.get(3).unwrap()).to_string();
 								self.current_song_info.nodisplay_time_listened = (**collection.get(4).unwrap()).to_string().parse().unwrap();
+							} else {
+								self.current_song_info.nodisplay_time_listened = 0;
 							}
 		
 							let reader = BufReader::new(file);
