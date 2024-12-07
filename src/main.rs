@@ -193,10 +193,9 @@ impl eframe::App for App {
 							}
 		
 							let reader = BufReader::new(file);
+							self.start_system = SystemTime::now();
 		
 							self.error = play_song(self, reader, &fp);
-
-							self.start_system = SystemTime::now();
 						}
 					});
 				}); 
