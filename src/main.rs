@@ -195,6 +195,8 @@ impl eframe::App for App {
 							let reader = BufReader::new(file);
 		
 							self.error = play_song(self, reader, &fp);
+
+							self.start_system = SystemTime::now();
 						}
 					});
 				}); 
@@ -306,6 +308,7 @@ impl eframe::App for App {
 						}
 						if self.sel_type == SelectionType::Next {
 							self.current_song_info.nodisplay_time_listened += self.start_system.elapsed().unwrap().as_millis();
+							self.start_system = SystemTime::now();
 							save_data_noinsert(
 								&self.current_song_info, &mut self.dat_map,
 								&self.songs_list, 	 	 self.cur_song_index
@@ -333,6 +336,7 @@ impl eframe::App for App {
 						}
 						if self.sel_type == SelectionType::Random {
 							self.current_song_info.nodisplay_time_listened += self.start_system.elapsed().unwrap().as_millis();
+							self.start_system = SystemTime::now();
 							save_data_noinsert(
 								&self.current_song_info, &mut self.dat_map,
 								&self.songs_list, 	 	 self.cur_song_index
