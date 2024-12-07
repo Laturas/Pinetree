@@ -163,7 +163,7 @@ impl eframe::App for App {
 								if dir.to_ascii_lowercase().contains(&self.search_text) {
 									ui.horizontal(|ui| {
 										ui.label(dir.clone());
-										if ui.button(">>").clicked() {
+										if ui.button("▶").clicked() {
 											song_change_triggered = true;
 											self.cur_song_index = index;
 										}
@@ -172,7 +172,7 @@ impl eframe::App for App {
 							} else {
 								ui.horizontal(|ui| {
 									ui.label(dir.clone());
-									if ui.button(">>").clicked() {
+									if ui.button("▶").clicked() {
 										song_change_triggered = true;
 										self.cur_song_index = index;
 									}
