@@ -86,6 +86,20 @@ impl Default for App {
 			},
 		}
 
+		let item = format!("songs\\{}", songls.get(0).unwrap());
+		let map_data = data_map.get(&item);
+
+		let mut new_si = SongInfo::default();
+
+		if let Some(map_data) = map_data {
+			let collection = map_data.split(',').collect::<Vec<&str>>();
+
+			new_si.name = (**collection.get(1).unwrap()).to_string();
+			new_si.artist = (**collection.get(2).unwrap()).to_string();
+			new_si.genre = (**collection.get(3).unwrap()).to_string();
+			new_si.nodisplay_time_listened = (**collection.get(4).unwrap()).to_string().parse().unwrap();
+		}
+		
 		Self {
 			_stream: i1,
 			sink: rodio::Sink::try_new(&i2).unwrap(),
@@ -100,7 +114,7 @@ impl Default for App {
 			total_duration: 0,
 			start_milis: 0,
 			position: 0,
-			current_song_info: SongInfo::default(),
+			current_song_info: new_si,
 			dat_map: data_map,
 		}
 	}
