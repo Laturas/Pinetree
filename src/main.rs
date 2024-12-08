@@ -74,11 +74,13 @@ impl Default for App {
 		initialize_data_map(&mut data_map);
 
 		match paths {
-			Ok(pat) => for p in pat {
+			Ok(pat) => {
 				songls.clear();
-				songls.push(format!("{}", format!("{}", 
-					p.unwrap().path().to_str().unwrap().split("\\").collect::<Vec<&str>>().last().unwrap())
-				));
+				for p in pat {
+					if let Ok(a) = p {
+						songls.push(a.file_name().into_string().unwrap());
+					}
+				}
 			},
 			Err(_) => {
 				songls.clear();
@@ -282,7 +284,7 @@ impl eframe::App for App {
 				}
 				
 				let og_spacing = ui.spacing().slider_width;
-				let size = ctx.available_rect().size().x - 353.0;
+				let size = ctx.available_rect().size().x - 360.0;
 				ui.spacing_mut().slider_width = size;
 
 				let secs = self.position / 1000;
@@ -388,9 +390,10 @@ impl eframe::App for App {
 				}
 				
 				ui.with_layout(egui::Layout::right_to_left(egui::Align::RIGHT), |ui| {
-					let volume_slider = ui.add(egui::Slider::new(&mut self.volume, 0.0..=1.0));
-					if volume_slider.dragged() {
-						self.sink.set_volume(self.volume);
+					let slider = ui.add( egui::Slider::new(&mut self.volume, 0.0..=1.0).show_value(false).text("Volume")).on_hover_text_at_pointer(format!("{}", self.volume));
+					if slider.dragged() {
+						let falloff = self.volume * self.volume * self.volume;
+						self.sink.set_volume(falloff);
 					}
 				});
 			});
