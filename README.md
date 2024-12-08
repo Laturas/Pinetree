@@ -14,6 +14,7 @@ Right now it may not be the most user-friendly, because I built it originally ju
 - Bold currently playing song
 - \[DONE\] Add greyed out text to search box when empty
 - \[DONE\] Make volume slider non-linear
+- \[DONE\] Default volume to 0.5
 ### Bugfixes
 - Allow song looping while minimized
 - When refreshing the song list, update the song ID for the currently playing song

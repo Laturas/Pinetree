@@ -111,7 +111,7 @@ impl Default for App {
 			songs_list: songls,
 			search_text: format!(""),
 			error: format!(""),
-			volume: 1.0,
+			volume: 0.5,
 			start_system: SystemTime::now(),
 			total_duration: 0,
 			start_milis: 0,
@@ -390,9 +390,9 @@ impl eframe::App for App {
 				}
 				
 				ui.with_layout(egui::Layout::right_to_left(egui::Align::RIGHT), |ui| {
-					let slider = ui.add( egui::Slider::new(&mut self.volume, 0.0..=1.0).show_value(false).text("Volume")).on_hover_text_at_pointer(format!("{}", self.volume));
-					if slider.dragged() {
-						let falloff = self.volume * self.volume * self.volume;
+					ui.add( egui::Slider::new(&mut self.volume, 0.0..=1.0).show_value(false).text("Volume")).on_hover_text_at_pointer(format!("{}", self.volume));
+					let falloff = self.volume * self.volume * self.volume;
+					if self.sink.volume() != falloff {
 						self.sink.set_volume(falloff);
 					}
 				});
