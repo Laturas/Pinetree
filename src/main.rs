@@ -390,8 +390,9 @@ impl eframe::App for App {
 				}
 				
 				ui.with_layout(egui::Layout::right_to_left(egui::Align::RIGHT), |ui| {
-					ui.add( egui::Slider::new(&mut self.volume, 0.0..=1.0).show_value(false).text("Volume")).on_hover_text_at_pointer(format!("{}", self.volume));
-					let falloff = self.volume * self.volume * self.volume;
+					ui.add( egui::Slider::new(&mut self.volume, -0.2..=1.0).show_value(false).text("Volume")).on_hover_text_at_pointer(format!("{}", self.volume));
+					//let falloff = self.volume * self.volume * self.volume;
+					let falloff = if self.volume <= -0.195 {0.0} else {(self.volume * 6.908).exp() / 1000.0};
 					if self.sink.volume() != falloff {
 						self.sink.set_volume(falloff);
 					}

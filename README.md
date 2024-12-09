@@ -13,7 +13,7 @@ Right now it may not be the most user-friendly, because I built it originally ju
 - Add tooltips
 - Bold currently playing song
 - **\[DONE\]** Add greyed out text to search box when empty
-- **\[DONE\]** Make volume slider non-linear
+- **\[DONE\]** Make volume slider logarithmic
 - **\[DONE\]** Default volume to 0.5
 ### Bugfixes
 - Allow song looping while minimized
