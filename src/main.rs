@@ -60,7 +60,9 @@ impl Default for SongInfo {
 	}
 }
 
-enum DataSaveError {Success,NoError,FileOpenFail}
+/// Success = ran and completed without error
+/// NoError = Has not run yet
+enum DataSaveError {Success,NoError,FileOpenFail,NoSongToSave}
 
 #[derive(PartialEq)]
 #[derive(Debug)]
@@ -91,34 +93,37 @@ impl Default for SharedAppData {
 
 		match paths {
 			Ok(pat) => {
-				songls.clear();
 				for p in pat {
 					if let Ok(a) = p {
-						songls.push(a.file_name().into_string().unwrap());
+						let sn = a.file_name().into_string().unwrap();
+						if sn.ends_with(".mp3") {songls.push(sn);}
 					}
 				}
 			},
-			Err(_) => {
-				songls.clear();
-				songls.push(format!("Error in fetching Music directory"));
-			},
+			Err(_) => {},
 		}
-
-		let item = songls.get(0).unwrap();
-		let map_data = data_map.get(item);
-
+		let data_found;
 		let mut new_si = SongInfo::default();
 
-		let data_found = if let Some(map_data) = map_data {
-			let collection = map_data.split(',').collect::<Vec<&str>>();
-
-			new_si.name = (**collection.get(1).unwrap()).to_string();
-			new_si.artist = (**collection.get(2).unwrap()).to_string();
-			new_si.genre = (**collection.get(3).unwrap()).to_string();
-			new_si.nodisplay_time_listened = (**collection.get(4).unwrap()).to_string().parse().unwrap();
-			true
-		} else {false};
-
+		let item = songls.get(0);
+		if let Some(item) = item {
+			let map_data = data_map.get(item);
+	
+			data_found = if let Some(map_data) = map_data {
+				let collection = map_data.split(',').collect::<Vec<&str>>();
+	
+				new_si.name = (**collection.get(1).unwrap_or(&"")).to_string();
+				new_si.artist = (**collection.get(2).unwrap_or(&"")).to_string();
+				new_si.genre = (**collection.get(3).unwrap_or(&"")).to_string();
+				new_si.nodisplay_time_listened = (**collection.get(4).unwrap_or(&"")).to_string().parse().unwrap_or(0);
+				true
+			}
+			else {
+				false
+			};
+		} else {
+			data_found = false;
+		}
 		Self {
 			sel_type: SelectionType::None,
 			cur_song_index: 0,
@@ -138,7 +143,7 @@ struct App {
 	sink: Arc<Mutex<rodio::Sink>>,
 	appdata: Arc<Mutex<SharedAppData>>,
 	
-	// Not accessed from other threads ***************
+	// Not accessed from other threads
 	search_text: String,
 	error: String,
 	volume: f32,
@@ -191,17 +196,17 @@ impl eframe::App for App {
 					appdata.songs_list.clear();
 
 					let paths = fs::read_dir("songs\\");
-					match paths {
-						Ok(pat) => {
-							for p in pat {
-								if let Ok(a) = p {
-									appdata.songs_list.push(a.file_name().into_string().unwrap());
+					if let Ok(paths) = paths {
+						for p in paths {
+							if let Ok(a) = p {
+								let song_result = a.file_name().into_string();
+								if let Ok(song_result) = song_result {
+									if song_result.ends_with(".mp3") {
+										appdata.songs_list.push(song_result);
+									}
 								}
 							}
-						},
-						Err(_) => {
-							appdata.songs_list.push(format!("Error in fetching Music directory"));
-						},
+						}
 					}
 				}
 				ui.add(egui::TextEdit::singleline(&mut self.search_text).hint_text("Search..."));
@@ -256,6 +261,11 @@ impl eframe::App for App {
 							
 							self.save_data_message = DataSaveError::NoError;
 							self.error = play_song(&mut self.appdata, &mut self.sink, res.0, &res.1);
+						} else {
+							let appdata = self.appdata.lock().unwrap();
+							if appdata.songs_list.len() == 0 {
+								ui.label("Error: No songs in active folder");
+							}
 						}
 					});
 				});
@@ -292,9 +302,11 @@ impl eframe::App for App {
 						});
 					}
 					match self.save_data_message {
-						DataSaveError::Success => {ui.label("Data saved successfully");},
 						DataSaveError::NoError => (),
+						DataSaveError::Success => {ui.label("Data saved successfully");},
+
 						DataSaveError::FileOpenFail => {ui.label("Error: Failed to save data (is data.csv open in another program?)");}
+						DataSaveError::NoSongToSave => {ui.label("Error: There is no active song to save the data for");}
 					};
 				});
 			});
@@ -303,7 +315,17 @@ impl eframe::App for App {
 		egui::TopBottomPanel::bottom("Player").show(ctx, |ui| {
 			ui.horizontal(|ui| {
 				let appdata = self.appdata.lock().unwrap();
-				ui.label(format!("Currently Playing: {}", appdata.songs_list.get(appdata.cur_song_index as usize).unwrap()));
+				
+				// If you know of a way of combining these let me know, cuz I don't know a better way.
+				if let Some(song_name) = appdata.songs_list.get(appdata.cur_song_index as usize)  {
+					if !self.sink.lock().unwrap().empty() {
+						ui.label(format!("Currently Playing: {}", song_name));
+					} else {
+						ui.label(format!("No song currently playing"));
+					}
+				} else {
+					ui.label(format!("No song currently playing"));
+				}
 				
 				ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
 					ui.label(&self.error)
@@ -312,22 +334,31 @@ impl eframe::App for App {
 			});
 			ui.horizontal(|ui| {
 				if ui.button("Play").clicked() {
-					let fp = {
+					let song_exists= {
 						let a_lock = self.appdata.lock().unwrap();
-						format!("songs\\{}", a_lock.songs_list.get(a_lock.cur_song_index).unwrap()
-					)};
-					let open_file = File::open(&fp);
-
-					if let Ok(open_file) = open_file {
-						let reader = BufReader::new(open_file);
-						
-						self.save_data_message = DataSaveError::NoError;
-						self.error = play_song(&mut self.appdata, &mut self.sink, reader, &fp);
-					}
-					else {
-						self.error = format!("File not found: {}", &fp);
+						let s_ind = a_lock.cur_song_index;
+						let tempsong = a_lock.songs_list.get(s_ind).clone();
+						tempsong.is_some()
+					};
+					if song_exists {
+						let fp = {
+							let a_lock = self.appdata.lock().unwrap();
+							format!("songs\\{}", a_lock.songs_list.get(a_lock.cur_song_index).unwrap()
+						)};
+						let open_file = File::open(&fp);
+	
+						if let Ok(open_file) = open_file {
+							let reader = BufReader::new(open_file);
+							
+							self.save_data_message = DataSaveError::NoError;
+							self.error = play_song(&mut self.appdata, &mut self.sink, reader, &fp);
+						}
+						else {
+							self.error = format!("File not found: {}", &fp);
+						}
 					}
 				}
+				// Scope here to prevent a deadlock
 				{
 					let sink = self.sink.lock().unwrap();
 					match sink.is_paused() {
@@ -340,9 +371,9 @@ impl eframe::App for App {
 							let mut appdata = self.appdata.lock().unwrap();
 							appdata.current_song_info.nodisplay_time_listened += appdata.start_system.elapsed().unwrap().as_millis();
 							let sindex = appdata.cur_song_index;
-							save_data_noinsert(
-								&mut appdata, sindex
-							);
+							if appdata.songs_list.len() != 0 {
+								save_data_noinsert(&mut appdata, sindex);
+							}
 							appdata.start_milis = appdata.position;
 						},
 					}
@@ -360,10 +391,11 @@ impl eframe::App for App {
 				let size = ctx.available_rect().size().x - 360.0;
 				ui.spacing_mut().slider_width = size;
 
+				
 				let dragged = {
 					let mut slappdata = self.appdata.lock().unwrap();
 
-					let secs = self.sink.lock().unwrap().get_pos().as_millis() / 1000;//slappdata.position / 1000;
+					let secs = self.sink.lock().unwrap().get_pos().as_millis() / 1000;
 					let max_duration = slappdata.total_duration;
 					
 					let seeker = ui.add(
@@ -371,6 +403,8 @@ impl eframe::App for App {
 						.handle_shape(egui::style::HandleShape::Rect { aspect_ratio: 1.0 })
 						.show_value(false)
 						.text(format!("{}:{}{}", secs / 60, if secs % 60 < 10 {"0"} else {""}, secs % 60))
+						.trailing_fill(true)
+						// Fill color can be adjusted with ui.visuals_mut().selection.bg_fill = Color32::{INSERT COLOR HERE};
 					);
 					ui.spacing_mut().slider_width = og_spacing;
 					seeker.dragged()
@@ -399,8 +433,8 @@ impl eframe::App for App {
 				ui.with_layout(egui::Layout::right_to_left(egui::Align::RIGHT), |ui| {
 					ui.add( egui::Slider::new(&mut self.volume, -0.2..=1.0)
 						.show_value(false)
-						.text("Volume"))
-						.on_hover_text_at_pointer(format!("{}", volume_curve(self.volume))
+						.text("Volume")
+						.trailing_fill(true)
 					);
 
 					let falloff = volume_curve(self.volume);
@@ -492,6 +526,9 @@ fn save_data_noinsert(app: &mut SharedAppData, cur_song_index: usize) {
 }
 
 fn save_data(app: &mut SharedAppData, cur_song_index: usize) -> DataSaveError {
+	if app.songs_list.len() == 0 {
+		return DataSaveError::NoSongToSave;
+	}
 	let current_song_info = &app.current_song_info;
 	let dat_map = &mut app.dat_map;
 	let songs_list = &app.songs_list;
@@ -524,13 +561,13 @@ fn initialize_data_map(data_map: &mut HashMap<String,String>) {
 	if let Ok(file) = file {
 		let reader = BufReader::new(file);
 		for line in reader.lines() {
-			let unwrapped_line = line.unwrap();
-			let unw_clone = unwrapped_line.clone();
-			let collection = unwrapped_line.split(',').collect::<Vec<&str>>();
+			if let Ok(line) = line {
+				let collection = line.split(',').collect::<Vec<&str>>();
 	
-			let key = (**collection.get(0).unwrap()).to_string();
-
-			data_map.insert(key, unw_clone);
+				let key = (**collection.get(0).unwrap()).to_string();
+	
+				data_map.insert(key, line);
+			}
 		}
 	}
 }
@@ -559,8 +596,8 @@ fn handle_song_end(sel_type: SelectionType, app: &mut Arc<Mutex<SharedAppData>>,
 			SelectionType::None => {format!("")},
 			SelectionType::Loop => {
 			let fp = {
-				let ada = app.lock().unwrap();
-				format!("songs\\{}", ada.songs_list.get(ada.cur_song_index).unwrap())
+				let appdata = app.lock().unwrap();
+				format!("songs\\{}", appdata.songs_list.get(appdata.cur_song_index).unwrap())
 			};
 			let open_file = File::open(&fp);
 			if let Ok(open_file) = open_file {
@@ -588,9 +625,7 @@ fn handle_song_end(sel_type: SelectionType, app: &mut Arc<Mutex<SharedAppData>>,
 				appdata.current_song_info.nodisplay_time_listened += appdata.start_system.elapsed().unwrap().as_millis();
 				appdata.start_system = SystemTime::now();
 				let sindex = appdata.cur_song_index;
-				save_data_noinsert(
-					&mut appdata, sindex
-				);
+				save_data_noinsert(&mut appdata, sindex);
 				
 				appdata.cur_song_index = if appdata.cur_song_index + 1 >= appdata.songs_list.len() {0} else {appdata.cur_song_index + 1};
 				
@@ -610,9 +645,7 @@ fn handle_song_end(sel_type: SelectionType, app: &mut Arc<Mutex<SharedAppData>>,
 				appdata.current_song_info.nodisplay_time_listened += appdata.start_system.elapsed().unwrap().as_millis();
 				appdata.start_system = SystemTime::now();
 				let sindex = appdata.cur_song_index;
-				save_data_noinsert(
-					&mut appdata, sindex
-				);
+				save_data_noinsert(&mut appdata, sindex);
 				
 				appdata.cur_song_index = rand::thread_rng().gen_range(0..appdata.songs_list.len());
 				
