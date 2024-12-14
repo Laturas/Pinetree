@@ -180,7 +180,10 @@ impl eframe::App for App {
 							if self.search_text.len() != 0 {
 								if dir.to_ascii_lowercase().contains(&self.search_text.to_ascii_lowercase()) {
 									ui.horizontal(|ui| {
-										ui.label(dir.clone());
+										if self.cur_song_index == index {
+											ui.label(RichText::new(dir.clone()).underline().strong());
+										}
+										else {ui.label(dir.clone());}
 										if ui.button("▶").clicked() {
 											song_change_triggered = true;
 											self.cur_song_index = index;
