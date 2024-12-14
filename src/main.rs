@@ -238,6 +238,7 @@ impl eframe::App for App {
 					if ui.button("Save").clicked() {
 						save_data(&self.current_song_info, &mut self.dat_map,
 								  &self.songs_list, 	 		self.cur_song_index);
+						self.song_data_exists = true;
 					}
 					if !self.song_data_exists {
 						ui.horizontal( |ui| {
