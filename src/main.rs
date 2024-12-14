@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")] // hide console window on Windows in release
 
 use eframe::{egui, egui::Visuals};
+use egui::{Color32, RichText};
 //use egui::ahash::HashMap;
 use std::{collections::HashMap, fs::{self, File, OpenOptions}, io::{BufRead, BufReader, Write}, path::Path, str, time::{Duration, SystemTime}};
 use rodio::{OutputStream, Source};
@@ -61,6 +62,7 @@ struct App {
 	position: u64,
 	total_duration: u64,
 	current_song_info: SongInfo,
+	song_data_exists: bool,
 	dat_map: HashMap<String, String>,
 }
 
@@ -88,19 +90,20 @@ impl Default for App {
 			},
 		}
 
-		let item = format!("songs\\{}", songls.get(0).unwrap());
-		let map_data = data_map.get(&item);
+		let item = songls.get(0).unwrap();
+		let map_data = data_map.get(item);
 
 		let mut new_si = SongInfo::default();
 
-		if let Some(map_data) = map_data {
+		let data_found = if let Some(map_data) = map_data {
 			let collection = map_data.split(',').collect::<Vec<&str>>();
 
 			new_si.name = (**collection.get(1).unwrap()).to_string();
 			new_si.artist = (**collection.get(2).unwrap()).to_string();
 			new_si.genre = (**collection.get(3).unwrap()).to_string();
 			new_si.nodisplay_time_listened = (**collection.get(4).unwrap()).to_string().parse().unwrap();
-		}
+			true
+		} else {false};
 		
 		Self {
 			_stream: i1,
@@ -116,6 +119,7 @@ impl Default for App {
 			total_duration: 0,
 			start_milis: 0,
 			position: 0,
+			song_data_exists: data_found,
 			current_song_info: new_si,
 			dat_map: data_map,
 		}
@@ -185,7 +189,10 @@ impl eframe::App for App {
 								}
 							} else {
 								ui.horizontal(|ui| {
-									ui.label(dir.clone());
+									if self.cur_song_index == index {
+										ui.label(RichText::new(dir.clone()).underline().strong());
+									}
+									else {ui.label(dir.clone());}
 									if ui.button("▶").clicked() {
 										song_change_triggered = true;
 										self.cur_song_index = index;
@@ -200,6 +207,7 @@ impl eframe::App for App {
 							let map_data = self.dat_map.get(*item);
 
 							if let Some(map_data) = map_data {
+								self.song_data_exists = true;
 								let collection = map_data.split(',').collect::<Vec<&str>>();
 
 								self.current_song_info.name = (**collection.get(1).unwrap()).to_string();
@@ -207,6 +215,8 @@ impl eframe::App for App {
 								self.current_song_info.genre = (**collection.get(3).unwrap()).to_string();
 								self.current_song_info.nodisplay_time_listened = (**collection.get(4).unwrap()).to_string().parse().unwrap();
 							} else {
+								self.song_data_exists = false;
+								self.current_song_info.name   = format!("");
 								self.current_song_info.nodisplay_time_listened = 0;
 							}
 		
@@ -238,6 +248,12 @@ impl eframe::App for App {
 					if ui.button("Save").clicked() {
 						save_data(&self.current_song_info, &mut self.dat_map,
 								  &self.songs_list, 	 		self.cur_song_index);
+					}
+					if !self.song_data_exists {
+						ui.horizontal( |ui| {
+							ui.label(RichText::new("Warning:").color(Color32::YELLOW));
+							ui.label("No associated saved data found");
+						});
 					}
 				});
 			});
@@ -280,6 +296,9 @@ impl eframe::App for App {
 				}
 				
 				if ui.button("Stop").clicked() {
+					self.position = 0;
+					self.start_system = SystemTime::now();
+					self.start_milis = 0;
 					self.sink.skip_one();
 				}
 				
@@ -391,7 +410,7 @@ impl eframe::App for App {
 				
 				ui.with_layout(egui::Layout::right_to_left(egui::Align::RIGHT), |ui| {
 					ui.add( egui::Slider::new(&mut self.volume, -0.2..=1.0).show_value(false).text("Volume")).on_hover_text_at_pointer(format!("{}", self.volume));
-					//let falloff = self.volume * self.volume * self.volume;
+
 					let falloff = if self.volume <= -0.195 {0.0} else {(self.volume * 6.908).exp() / 1000.0};
 					if self.sink.volume() != falloff {
 						self.sink.set_volume(falloff);
