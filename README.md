@@ -16,7 +16,7 @@ Right now it may not be the most user-friendly, because I built it originally ju
 - **\[DONE\]** Make volume slider logarithmic
 - **\[DONE\]** Default volume to 0.5
 ### Bugfixes
-- Allow song looping while minimized
+- **\[FIXED\]** Allow song looping while minimized (This was so hard oh my god)
 - When refreshing the song list, update the song ID for the currently playing song
 - **\[FIXED\]** Fix searching breaking when typing capital letters
 - Add broader support for non-ascii characters (Unlikely to fix. This could be very difficult)
