@@ -60,6 +60,8 @@ impl Default for SongInfo {
 	}
 }
 
+enum DataSaveError {Success,NoError,FileOpenFail}
+
 #[derive(PartialEq)]
 #[derive(Debug)]
 #[derive(Clone)]
@@ -140,6 +142,7 @@ struct App {
 	search_text: String,
 	error: String,
 	volume: f32,
+	save_data_message: DataSaveError,
 
 	_stream: OutputStream, // THIS HAS TO EXIST otherwise the lifetime causes the program to crash
 }
@@ -155,6 +158,7 @@ impl Default for App {
 			search_text: format!(""),
 			error: format!(""),
 			volume: 0.5,
+			save_data_message: DataSaveError::NoError,
 		}
 	}
 }
@@ -249,7 +253,8 @@ impl eframe::App for App {
 								appdata.song_data_exists = data_exists;
 								(reader, fp)
 							};
-		
+							
+							self.save_data_message = DataSaveError::NoError;
 							self.error = play_song(&mut self.appdata, &mut self.sink, res.0, &res.1);
 						}
 					});
@@ -275,7 +280,7 @@ impl eframe::App for App {
 					});
 					if ui.button("Save").clicked() {
 						let sindex = appdata.cur_song_index;
-						save_data(
+						self.save_data_message = save_data(
 							&mut appdata, sindex
 						);
 						appdata.song_data_exists = true;
@@ -286,6 +291,11 @@ impl eframe::App for App {
 							ui.label("No associated saved data found");
 						});
 					}
+					match self.save_data_message {
+						DataSaveError::Success => {ui.label("Data saved successfully");},
+						DataSaveError::NoError => (),
+						DataSaveError::FileOpenFail => {ui.label("Error: Failed to save data (is data.csv open in another program?)");}
+					};
 				});
 			});
 		});
@@ -311,6 +321,7 @@ impl eframe::App for App {
 					if let Ok(open_file) = open_file {
 						let reader = BufReader::new(open_file);
 						
+						self.save_data_message = DataSaveError::NoError;
 						self.error = play_song(&mut self.appdata, &mut self.sink, reader, &fp);
 					}
 					else {
@@ -352,7 +363,7 @@ impl eframe::App for App {
 				let dragged = {
 					let mut slappdata = self.appdata.lock().unwrap();
 
-					let secs = slappdata.position / 1000;
+					let secs = self.sink.lock().unwrap().get_pos().as_millis() / 1000;//slappdata.position / 1000;
 					let max_duration = slappdata.total_duration;
 					
 					let seeker = ui.add(
@@ -447,7 +458,7 @@ fn play_song(appdata: &mut Arc<Mutex<SharedAppData>>, sink: &mut Arc<Mutex<Sink>
 			appdata_mut.position = 0;
 			appdata_mut.start_milis = 0;
 
-			sink.append(a); 
+			sink.append(a.track_position()); 
 			format!("")},
 		Err(_) => format!("Error in decoding song :("),
 	}
@@ -467,18 +478,20 @@ fn save_data_noinsert(app: &mut SharedAppData, cur_song_index: usize) {
 	} else {
 		return;
 	}
-	fs::write("data.csv", "").expect("Unable to write file");
+	let write_result = fs::write("data.csv", "");
 
-	for keys in dat_map.keys() {
-		let mut f = OpenOptions::new()
-			.append(true)
-			.open("data.csv")
-			.unwrap(); // TODO: This can fail and cause the program to crash. Fix this.
-		let _ = writeln!(f, "{}", dat_map.get(keys).unwrap()).is_ok();
+	if let Err(_) = write_result {return;}
+
+	let f = OpenOptions::new().append(true).open("data.csv");
+
+	if let Ok(mut f) = f {
+		for keys in dat_map.keys() {
+			let _ = writeln!(f, "{}", dat_map.get(keys).unwrap()).is_ok();
+		}
 	}
 }
 
-fn save_data(app: &mut SharedAppData, cur_song_index: usize) {
+fn save_data(app: &mut SharedAppData, cur_song_index: usize) -> DataSaveError {
 	let current_song_info = &app.current_song_info;
 	let dat_map = &mut app.dat_map;
 	let songs_list = &app.songs_list;
@@ -486,14 +499,21 @@ fn save_data(app: &mut SharedAppData, cur_song_index: usize) {
 	let data = format!("{},{},{},{},{}", current_s, current_song_info.name, current_song_info.artist, current_song_info.genre, current_song_info.nodisplay_time_listened);
 	
 	dat_map.insert(current_s.clone(), data);
-	fs::write("data.csv", "").expect("Unable to write file");
+	let write_result = fs::write("data.csv", "");
 
-	for keys in dat_map.keys() {
-		let mut f = OpenOptions::new()
-			.append(true)
-			.open("data.csv")
-			.unwrap();
-		let _ = writeln!(f, "{}", dat_map.get(keys).unwrap()).is_ok();
+	if let Err(_) = write_result {
+		return DataSaveError::FileOpenFail;
+	}
+
+	let f = OpenOptions::new().append(true).open("data.csv");
+
+	if let Ok(mut f) = f {
+		for keys in dat_map.keys() {
+			let _ = writeln!(f, "{}", dat_map.get(keys).unwrap()).is_ok();
+		}
+		return DataSaveError::Success;
+	} else {
+		return DataSaveError::FileOpenFail;
 	}
 }
 
@@ -521,10 +541,10 @@ fn update_cursong_data(appdata: &mut SharedAppData, song_name: &str) -> bool {
 	if let Some(map_data) = map_data {
 		let collection = map_data.split(',').collect::<Vec<&str>>();
 
-		appdata.current_song_info.name = (**collection.get(1).unwrap()).to_string();
-		appdata.current_song_info.artist = (**collection.get(2).unwrap()).to_string();
-		appdata.current_song_info.genre = (**collection.get(3).unwrap()).to_string();
-		appdata.current_song_info.nodisplay_time_listened = (**collection.get(4).unwrap()).to_string().parse().unwrap();
+		appdata.current_song_info.name = (**collection.get(1).unwrap_or(&format!("").as_str())).to_string();
+		appdata.current_song_info.artist = (**collection.get(2).unwrap_or(&format!("").as_str())).to_string();
+		appdata.current_song_info.genre = (**collection.get(3).unwrap_or(&format!("").as_str())).to_string();
+		appdata.current_song_info.nodisplay_time_listened = (**collection.get(4).unwrap_or(&format!("").as_str())).to_string().parse().unwrap_or(0);
 		return true;
 	} else {
 		appdata.current_song_info.name   = format!("");

@@ -22,7 +22,7 @@ Right now it may not be the most user-friendly, because I built it originally ju
 - **\[FIXED\]** Fix searching breaking when typing capital letters
 - Add broader support for non-ascii characters (Unlikely to fix. This could be very difficult)
 - **\[FIXED\]** Fix data not being grabbed when song first loaded.
-- Fix desync between timer and position within the song when dragging to the end
+- **\[FIXED\]** Fix desync between timer and position within the song when dragging to the end
 - There's a lot of `unwrap()` calls left that need to be handled/vetted.
 ### Features
 - Allow song grouping into folders
