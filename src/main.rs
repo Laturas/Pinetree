@@ -2,7 +2,6 @@
 
 use eframe::{egui::Visuals};
 use egui::{Color32, RichText};
-//use egui::ahash::HashMap;
 use std::{
 	collections::HashMap,
 	fs::{self, File, OpenOptions},
@@ -42,8 +41,6 @@ fn main() -> Result<(), eframe::Error> {
 		Box::new(|_cc| {Box::new(app)}),
 	)
 }
-
-//static mut DATA: Vec<(String, String)> = Vec::new();
 
 struct SongInfo {
 	name: String,
@@ -389,9 +386,13 @@ impl eframe::App for App {
 				}
 				
 				ui.with_layout(egui::Layout::right_to_left(egui::Align::RIGHT), |ui| {
-					ui.add( egui::Slider::new(&mut self.volume, -0.2..=1.0).show_value(false).text("Volume")).on_hover_text_at_pointer(format!("{}", self.volume));
+					ui.add( egui::Slider::new(&mut self.volume, -0.2..=1.0)
+						.show_value(false)
+						.text("Volume"))
+						.on_hover_text_at_pointer(format!("{}", volume_curve(self.volume))
+					);
 
-					let falloff = if self.volume <= -0.195 {0.0} else {(self.volume * 6.908).exp() / 1000.0};
+					let falloff = volume_curve(self.volume);
 					if sink.volume() != falloff {
 						sink.set_volume(falloff);
 					}
@@ -399,6 +400,18 @@ impl eframe::App for App {
 			});
 		});
 	}
+}
+
+/// Human hearing is logarithmic, so the volume slider follows an exponential curve to compensate.
+/// Specifically this is one that is meant to very closely match the decibel scale (hence the magic number of 6.908).
+/// 
+/// Has to be clamped though unfortunately, because exponential curves never technically reach 0.
+/// This creates a sharp cutoff at the lowest volume, but at that point it's quiet enough I don't imagine people will notice.
+/// 
+/// Surprised this isn't more common.
+fn volume_curve(input: f32) -> f32 {
+	if input <= -0.195 {return 0.0;}
+	return (input * 6.908).exp() / 1000.0
 }
 
 fn play_song(appdata: &mut Arc<Mutex<SharedAppData>>, sink: &mut Arc<Mutex<Sink>>, reader: BufReader<File>, fp: &str) -> String {
@@ -440,6 +453,8 @@ fn play_song(appdata: &mut Arc<Mutex<SharedAppData>>, sink: &mut Arc<Mutex<Sink>
 	}
 }
 
+/// This writes the data out to the file, but if the song isn't already in the dataset it doesn't add it.
+/// This makes it distinct from the saving function activated by the "save" button.
 fn save_data_noinsert(app: &mut SharedAppData, cur_song_index: usize) {
 	let current_song_info = &app.current_song_info;
 	let dat_map = &mut app.dat_map;
@@ -458,7 +473,7 @@ fn save_data_noinsert(app: &mut SharedAppData, cur_song_index: usize) {
 		let mut f = OpenOptions::new()
 			.append(true)
 			.open("data.csv")
-			.unwrap();
+			.unwrap(); // TODO: This can fail and cause the program to crash. Fix this.
 		let _ = writeln!(f, "{}", dat_map.get(keys).unwrap()).is_ok();
 	}
 }
@@ -518,6 +533,7 @@ fn update_cursong_data(appdata: &mut SharedAppData, song_name: &str) -> bool {
 	}
 }
 
+/// Returns error text to be displayed
 fn handle_song_end(sel_type: SelectionType, app: &mut Arc<Mutex<SharedAppData>>, sink: &mut Arc<Mutex<Sink>>) -> String {
 	return match sel_type {
 			SelectionType::None => {format!("")},

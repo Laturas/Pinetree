@@ -15,12 +15,15 @@ Right now it may not be the most user-friendly, because I built it originally ju
 - **\[DONE\]** Add greyed out text to search box when empty
 - **\[DONE\]** Make volume slider logarithmic
 - **\[DONE\]** Default volume to 0.5
+- **\[DONE\]** Make song timer refresh more often
 ### Bugfixes
 - **\[FIXED\]** Allow song looping while minimized (This was so hard oh my god)
 - When refreshing the song list, update the song ID for the currently playing song
 - **\[FIXED\]** Fix searching breaking when typing capital letters
 - Add broader support for non-ascii characters (Unlikely to fix. This could be very difficult)
 - **\[FIXED\]** Fix data not being grabbed when song first loaded.
+- Fix desync between timer and position within the song when dragging to the end
+- There's a lot of `unwrap()` calls left that need to be handled/vetted.
 ### Features
 - Allow song grouping into folders
 - **\[ADDED\]** Create shuffle feature and in-order playing
