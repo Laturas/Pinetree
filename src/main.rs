@@ -207,21 +207,8 @@ impl eframe::App for App {
 							let item = &self.songs_list.get(self.cur_song_index).unwrap();
 							let fp = format!("songs\\{}", item);
 							let file = File::open(&fp).unwrap();
-							let map_data = self.dat_map.get(*item);
 
-							if let Some(map_data) = map_data {
-								self.song_data_exists = true;
-								let collection = map_data.split(',').collect::<Vec<&str>>();
-
-								self.current_song_info.name = (**collection.get(1).unwrap()).to_string();
-								self.current_song_info.artist = (**collection.get(2).unwrap()).to_string();
-								self.current_song_info.genre = (**collection.get(3).unwrap()).to_string();
-								self.current_song_info.nodisplay_time_listened = (**collection.get(4).unwrap()).to_string().parse().unwrap();
-							} else {
-								self.song_data_exists = false;
-								self.current_song_info.name   = format!("");
-								self.current_song_info.nodisplay_time_listened = 0;
-							}
+							update_cursong_data(&self.dat_map, &mut self.song_data_exists, &mut self.current_song_info, &item);
 		
 							let reader = BufReader::new(file);
 							self.start_system = SystemTime::now();
@@ -358,18 +345,7 @@ impl eframe::App for App {
 							let item = &self.songs_list.get(self.cur_song_index).unwrap();
 							let fp = format!("songs\\{}", item);
 							let file = File::open(&fp).unwrap();
-							let map_data = self.dat_map.get(*item);
-
-							if let Some(map_data) = map_data {
-								let collection = map_data.split(',').collect::<Vec<&str>>();
-
-								self.current_song_info.name = (**collection.get(1).unwrap()).to_string();
-								self.current_song_info.artist = (**collection.get(2).unwrap()).to_string();
-								self.current_song_info.genre = (**collection.get(3).unwrap()).to_string();
-								self.current_song_info.nodisplay_time_listened = (**collection.get(4).unwrap()).to_string().parse().unwrap();
-							} else {
-								self.current_song_info.nodisplay_time_listened = 0;
-							}
+							update_cursong_data(&self.dat_map, &mut self.song_data_exists, &mut self.current_song_info, &item);
 		
 							let reader = BufReader::new(file);
 		
@@ -388,18 +364,7 @@ impl eframe::App for App {
 							let item = &self.songs_list.get(self.cur_song_index).unwrap();
 							let fp = format!("songs\\{}", item);
 							let file = File::open(&fp).unwrap();
-							let map_data = self.dat_map.get(*item);
-
-							if let Some(map_data) = map_data {
-								let collection = map_data.split(',').collect::<Vec<&str>>();
-
-								self.current_song_info.name = (**collection.get(1).unwrap()).to_string();
-								self.current_song_info.artist = (**collection.get(2).unwrap()).to_string();
-								self.current_song_info.genre = (**collection.get(3).unwrap()).to_string();
-								self.current_song_info.nodisplay_time_listened = (**collection.get(4).unwrap()).to_string().parse().unwrap();
-							} else {
-								self.current_song_info.nodisplay_time_listened = 0;
-							}
+							update_cursong_data(&self.dat_map, &mut self.song_data_exists, &mut self.current_song_info, &item);
 		
 							let reader = BufReader::new(file);
 		
@@ -511,5 +476,23 @@ fn initialize_data_map(data_map: &mut HashMap<String,String>) {
 
 			data_map.insert(key, unw_clone);
 		}
+	}
+}
+
+fn update_cursong_data(dat_map: &HashMap<String, String>, song_data_exists: &mut bool, current_song_info: &mut SongInfo, song_name: &str) {
+	let map_data = dat_map.get(song_name);
+
+	if let Some(map_data) = map_data {
+		*song_data_exists = true;
+		let collection = map_data.split(',').collect::<Vec<&str>>();
+
+		current_song_info.name = (**collection.get(1).unwrap()).to_string();
+		current_song_info.artist = (**collection.get(2).unwrap()).to_string();
+		current_song_info.genre = (**collection.get(3).unwrap()).to_string();
+		current_song_info.nodisplay_time_listened = (**collection.get(4).unwrap()).to_string().parse().unwrap();
+	} else {
+		*song_data_exists = false;
+		current_song_info.name   = format!("");
+		current_song_info.nodisplay_time_listened = 0;
 	}
 }
