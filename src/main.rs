@@ -32,8 +32,7 @@ fn main() -> Result<(), eframe::Error> {
             thread::sleep(Duration::from_secs(1));
             if sink.lock().unwrap().empty() {
 				let sel_type = shared_data.lock().unwrap().sel_type.clone();
-				handle_song_end(sel_type, &mut shared_data, &mut sink);
-				
+				let _ = handle_song_end(sel_type, &mut shared_data, &mut sink);
 			}
         }
 	});
@@ -380,75 +379,7 @@ impl eframe::App for App {
 					let empt = self.sink.lock().unwrap().empty();
 					if empt {
 						let sel_type = self.appdata.lock().unwrap().sel_type.clone();
-						if sel_type == SelectionType::Loop {
-							let fp = {
-								let ada = self.appdata.lock().unwrap();
-								format!("songs\\{}", ada.songs_list.get(ada.cur_song_index).unwrap())
-							};
-							let open_file = File::open(&fp);
-							if let Ok(open_file) = open_file {
-								let reader = {
-									let mut appdata = self.appdata.lock().unwrap();
-									let reader = BufReader::new(open_file);
-									
-									appdata.current_song_info.nodisplay_time_listened += appdata.start_system.elapsed().unwrap().as_millis();
-									let sindex = appdata.cur_song_index;
-									save_data_noinsert(
-										&mut appdata, sindex
-									);
-									reader
-								};
-								
-								self.error = play_song(&mut self.appdata, &mut self.sink, reader, &fp);
-							}
-							else {
-								self.error = format!("File not found: {}", &fp);
-							}
-						}
-						if sel_type == SelectionType::Next {
-							let fp = {
-								let mut appdata = self.appdata.lock().unwrap();
-								appdata.current_song_info.nodisplay_time_listened += appdata.start_system.elapsed().unwrap().as_millis();
-								appdata.start_system = SystemTime::now();
-								let sindex = appdata.cur_song_index;
-								save_data_noinsert(
-									&mut appdata, sindex
-								);
-								
-								appdata.cur_song_index = if appdata.cur_song_index + 1 >= appdata.songs_list.len() {0} else {appdata.cur_song_index + 1};
-								
-								let mut item = appdata.songs_list.get(appdata.cur_song_index).unwrap().clone();
-								let fp = format!("songs\\{}", item);
-								appdata.song_data_exists = update_cursong_data(&mut appdata, &mut item);
-								fp
-							};
-							let file = File::open(&fp).unwrap();
-							let reader = BufReader::new(file);
-							
-							self.error = play_song(&mut self.appdata, &mut self.sink, reader, &fp);
-						}
-						if sel_type == SelectionType::Random {
-							let fp = {
-								let mut appdata = self.appdata.lock().unwrap();
-								appdata.current_song_info.nodisplay_time_listened += appdata.start_system.elapsed().unwrap().as_millis();
-								appdata.start_system = SystemTime::now();
-								let sindex = appdata.cur_song_index;
-								save_data_noinsert(
-									&mut appdata, sindex
-								);
-								
-								appdata.cur_song_index = rand::thread_rng().gen_range(0..appdata.songs_list.len());
-								
-								let mut item = appdata.songs_list.get(appdata.cur_song_index).unwrap().clone();
-								let fp = format!("songs\\{}", item);
-								appdata.song_data_exists = update_cursong_data(&mut appdata, &mut item);
-								fp
-							};
-							let file = File::open(&fp).unwrap();
-							let reader = BufReader::new(file);
-							
-							self.error = play_song(&mut self.appdata, &mut self.sink, reader, &fp);
-						}
+						self.error = handle_song_end(sel_type, &mut self.appdata, &mut self.sink);
 					}
 				}
 				let sink = self.sink.lock().unwrap();
@@ -587,74 +518,77 @@ fn update_cursong_data(appdata: &mut SharedAppData, song_name: &str) -> bool {
 	}
 }
 
-fn handle_song_end(sel_type: SelectionType, app: &mut Arc<Mutex<SharedAppData>>, sink: &mut Arc<Mutex<Sink>>) {
-	if sel_type == SelectionType::Loop {
-		let fp = {
-			let ada = app.lock().unwrap();
-			format!("songs\\{}", ada.songs_list.get(ada.cur_song_index).unwrap())
-		};
-		let open_file = File::open(&fp);
-		if let Ok(open_file) = open_file {
-			let reader = {
-				let mut appdata = app.lock().unwrap();
-				let reader = BufReader::new(open_file);
+fn handle_song_end(sel_type: SelectionType, app: &mut Arc<Mutex<SharedAppData>>, sink: &mut Arc<Mutex<Sink>>) -> String {
+	return match sel_type {
+			SelectionType::None => {format!("")},
+			SelectionType::Loop => {
+			let fp = {
+				let ada = app.lock().unwrap();
+				format!("songs\\{}", ada.songs_list.get(ada.cur_song_index).unwrap())
+			};
+			let open_file = File::open(&fp);
+			if let Ok(open_file) = open_file {
+				let reader = {
+					let mut appdata = app.lock().unwrap();
+					let reader = BufReader::new(open_file);
+					
+					appdata.current_song_info.nodisplay_time_listened += appdata.start_system.elapsed().unwrap().as_millis();
+					let sindex = appdata.cur_song_index;
+					save_data_noinsert(
+						&mut appdata, sindex
+					);
+					reader
+				};
 				
+				play_song(app, sink, reader, &fp)
+			}
+			else {
+				format!("File not found: {}", &fp)
+			}
+		},
+		SelectionType::Next => {
+			let fp = {
+				let mut appdata = app.lock().unwrap();
 				appdata.current_song_info.nodisplay_time_listened += appdata.start_system.elapsed().unwrap().as_millis();
+				appdata.start_system = SystemTime::now();
 				let sindex = appdata.cur_song_index;
 				save_data_noinsert(
 					&mut appdata, sindex
 				);
-				reader
+				
+				appdata.cur_song_index = if appdata.cur_song_index + 1 >= appdata.songs_list.len() {0} else {appdata.cur_song_index + 1};
+				
+				let mut item = appdata.songs_list.get(appdata.cur_song_index).unwrap().clone();
+				let fp = format!("songs\\{}", item);
+				appdata.song_data_exists = update_cursong_data(&mut appdata, &mut item);
+				fp
 			};
+			let file = File::open(&fp).unwrap();
+			let reader = BufReader::new(file);
 			
-			_ = play_song(app, sink, reader, &fp);
-		}
-		else {
-			_ = format!("File not found: {}", &fp);
-		}
-	}
-	if sel_type == SelectionType::Next {
-		let fp = {
-			let mut appdata = app.lock().unwrap();
-			appdata.current_song_info.nodisplay_time_listened += appdata.start_system.elapsed().unwrap().as_millis();
-			appdata.start_system = SystemTime::now();
-			let sindex = appdata.cur_song_index;
-			save_data_noinsert(
-				&mut appdata, sindex
-			);
+			play_song(app, sink, reader, &fp)
+		},
+		SelectionType::Random => {
+			let fp = {
+				let mut appdata = app.lock().unwrap();
+				appdata.current_song_info.nodisplay_time_listened += appdata.start_system.elapsed().unwrap().as_millis();
+				appdata.start_system = SystemTime::now();
+				let sindex = appdata.cur_song_index;
+				save_data_noinsert(
+					&mut appdata, sindex
+				);
+				
+				appdata.cur_song_index = rand::thread_rng().gen_range(0..appdata.songs_list.len());
+				
+				let mut item = appdata.songs_list.get(appdata.cur_song_index).unwrap().clone();
+				let fp = format!("songs\\{}", item);
+				appdata.song_data_exists = update_cursong_data(&mut appdata, &mut item);
+				fp
+			};
+			let file = File::open(&fp).unwrap();
+			let reader = BufReader::new(file);
 			
-			appdata.cur_song_index = if appdata.cur_song_index + 1 >= appdata.songs_list.len() {0} else {appdata.cur_song_index + 1};
-			
-			let mut item = appdata.songs_list.get(appdata.cur_song_index).unwrap().clone();
-			let fp = format!("songs\\{}", item);
-			appdata.song_data_exists = update_cursong_data(&mut appdata, &mut item);
-			fp
-		};
-		let file = File::open(&fp).unwrap();
-		let reader = BufReader::new(file);
-		
-		_ = play_song(app, sink, reader, &fp);
-	}
-	if sel_type == SelectionType::Random {
-		let fp = {
-			let mut appdata = app.lock().unwrap();
-			appdata.current_song_info.nodisplay_time_listened += appdata.start_system.elapsed().unwrap().as_millis();
-			appdata.start_system = SystemTime::now();
-			let sindex = appdata.cur_song_index;
-			save_data_noinsert(
-				&mut appdata, sindex
-			);
-			
-			appdata.cur_song_index = rand::thread_rng().gen_range(0..appdata.songs_list.len());
-			
-			let mut item = appdata.songs_list.get(appdata.cur_song_index).unwrap().clone();
-			let fp = format!("songs\\{}", item);
-			appdata.song_data_exists = update_cursong_data(&mut appdata, &mut item);
-			fp
-		};
-		let file = File::open(&fp).unwrap();
-		let reader = BufReader::new(file);
-		
-		_ = play_song(app, sink, reader, &fp);
-	}
+			play_song(app, sink, reader, &fp)
+		},
+	};
 }
