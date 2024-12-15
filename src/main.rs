@@ -4,15 +4,15 @@ use eframe::{egui::Visuals};
 use egui::{Color32, RichText};
 use std::{
 	collections::HashMap,
-	fs::{self, File, OpenOptions},
+	fs::{File, OpenOptions},
 	io::{BufRead, BufReader, Write},
 	path::Path,
 	sync::{Arc, Mutex},
-	thread,
-	time::{Duration, SystemTime}
+	time::{Duration, SystemTime},
 };
-use rodio::{OutputStream, Sink, Source};
+use rodio::{Sink, Source};
 use rand::Rng;
+use id3::{self, TagLike};
 
 // This is a really stupid dependency but as it turns out I guess this is a non-trivial problem???
 // Rodio's built in functionality for this just doesn't work most of the time for some reason.
@@ -26,9 +26,9 @@ fn main() -> Result<(), eframe::Error> {
 	let app = App::default();
 	let mut sink = app.sink.clone();
 	let mut shared_data = app.appdata.clone();
-	thread::spawn(move || {
+	std::thread::spawn(move || {
         loop {
-            thread::sleep(Duration::from_secs(1));
+            std::thread::sleep(Duration::from_secs(1));
             if sink.lock().unwrap().empty() {
 				let sel_type = shared_data.lock().unwrap().sel_type.clone();
 				let _ = handle_song_end(sel_type, &mut shared_data, &mut sink);
@@ -38,7 +38,7 @@ fn main() -> Result<(), eframe::Error> {
 	eframe::run_native(
 		"Dreamer",
 		options,
-		Box::new(|_cc| {Box::new(app)}),
+		Box::new(|_cc| {Ok(Box::new(app))}),
 	)
 }
 
@@ -86,7 +86,7 @@ struct SharedAppData {
 impl Default for SharedAppData {
 	fn default() -> Self {
 		let mut songls: Vec<String> = vec![];
-		let paths = fs::read_dir("songs\\");
+		let paths = std::fs::read_dir("songs\\");
 		let mut data_map: HashMap<String,String> = HashMap::new();
 
 		initialize_data_map(&mut data_map);
@@ -149,12 +149,12 @@ struct App {
 	volume: f32,
 	save_data_message: DataSaveError,
 
-	_stream: OutputStream, // THIS HAS TO EXIST otherwise the lifetime causes the program to crash
+	_stream: rodio::OutputStream, // THIS HAS TO EXIST otherwise the lifetime causes the program to crash
 }
 
 impl Default for App {
 	fn default() -> Self {
-		let (i1, i2) = OutputStream::try_default().unwrap();
+		let (i1, i2) = rodio::OutputStream::try_default().unwrap();
 		
 		Self {
 			_stream: i1,
@@ -195,7 +195,7 @@ impl eframe::App for App {
 					let mut appdata = self.appdata.lock().unwrap();
 					appdata.songs_list.clear();
 
-					let paths = fs::read_dir("songs\\");
+					let paths = std::fs::read_dir("songs\\");
 					if let Ok(paths) = paths {
 						for p in paths {
 							if let Ok(a) = p {
@@ -271,6 +271,8 @@ impl eframe::App for App {
 				});
 				
 				ui.vertical(|ui| {
+					ui.set_max_width(225.0);
+					ui.set_min_width(225.0);
 					let mut appdata = self.appdata.lock().unwrap();
 					ui.set_max_width(200.0);
 					ui.vertical_centered(|ui| {
@@ -288,26 +290,65 @@ impl eframe::App for App {
 						let genre_label = ui.label("Genre");
 						ui.text_edit_singleline(&mut appdata.current_song_info.genre).labelled_by(genre_label.id);
 					});
-					if ui.button("Save").clicked() {
-						let sindex = appdata.cur_song_index;
-						self.save_data_message = save_data(
-							&mut appdata, sindex
-						);
-						appdata.song_data_exists = true;
-					}
-					if !appdata.song_data_exists {
-						ui.horizontal( |ui| {
-							ui.label(RichText::new("Warning:").color(Color32::YELLOW));
-							ui.label("No associated saved data found");
-						});
-					}
-					match self.save_data_message {
-						DataSaveError::NoError => (),
-						DataSaveError::Success => {ui.label("Data saved successfully");},
-
-						DataSaveError::FileOpenFail => {ui.label("Error: Failed to save data (is data.csv open in another program?)");}
-						DataSaveError::NoSongToSave => {ui.label("Error: There is no active song to save the data for");}
-					};
+					ui.horizontal(|ui| {
+						if ui.button("Save").clicked() {
+							let sindex = appdata.cur_song_index;
+							self.save_data_message = save_data(
+								&mut appdata, sindex
+							);
+							appdata.song_data_exists = true;
+						}
+						if !appdata.song_data_exists {
+							ui.horizontal( |ui| {
+								ui.label(RichText::new("Warning:").color(Color32::YELLOW));
+								ui.label("No saved data found");
+							});
+						}
+						match self.save_data_message {
+							DataSaveError::NoError => (),
+							DataSaveError::Success => {ui.label("Data saved successfully");},
+	
+							DataSaveError::FileOpenFail => {ui.label("Error: Failed to save data (is data.csv open in another program?)");}
+							DataSaveError::NoSongToSave => {ui.label("Error: There is no active song to save the data for");}
+						};
+					});
+					ui.separator();
+					ui.vertical_centered(|ui| {
+						ui.heading("Metadata");
+					});
+					
+					egui::Frame {
+						inner_margin: egui::Margin{left: 2., right: 0.,top: 3.,bottom: 3.,},
+						outer_margin: egui::Margin{left: 2., right: 2.,top: 2.,bottom: 20.,},
+						stroke: egui::Stroke::new(1.0,Color32::DARK_GRAY),
+						..Default::default()
+					}.fill(Color32::BLACK).show(ui, |ui| {
+						ui.set_max_width(225.0);
+						ui.set_min_width(225.0);
+						//ui.style_mut().wrap_mode = Some(TextWrapMode::Truncate);
+						let item = appdata.songs_list.get(appdata.cur_song_index);
+						let tag = if let Some(item) = item {let fp = format!("songs\\{}", item); Some(id3::Tag::read_from_path(&fp))} else {None};
+						
+						ui.set_min_height(25.0);
+						ui.set_max_height(25.0);
+						if let Some(tag) = tag {
+							if let Ok(tag) = tag {
+								egui::ScrollArea::vertical().show(ui, |ui| {
+									if let Some(artist) = tag.artist() {
+										ui.label(egui::RichText::new(format!("Artist: {}", artist)).background_color(Color32::BLACK).size(13.0).line_height(Some(16.0)));
+									}
+									if let Some(title) = tag.title() {
+										ui.label(egui::RichText::new(format!("Title: {}", title)).background_color(Color32::BLACK).size(13.0).line_height(Some(16.0)));
+									}
+									if let Some(album) = tag.album() {
+										ui.label(egui::RichText::new(format!("Album: {}", album)).background_color(Color32::BLACK).size(13.0).line_height(Some(16.0)));
+									}
+								});
+							} else {
+								ui.label(egui::RichText::new(format!("No metadata found")).background_color(Color32::BLACK).size(14.0).line_height(Some(16.0)));
+							}
+						}
+					});
 				});
 			});
 		});
@@ -512,7 +553,7 @@ fn save_data_noinsert(app: &mut SharedAppData, cur_song_index: usize) {
 	} else {
 		return;
 	}
-	let write_result = fs::write("data.csv", "");
+	let write_result = std::fs::write("data.csv", "");
 
 	if let Err(_) = write_result {return;}
 
@@ -536,7 +577,7 @@ fn save_data(app: &mut SharedAppData, cur_song_index: usize) -> DataSaveError {
 	let data = format!("{},{},{},{},{}", current_s, current_song_info.name, current_song_info.artist, current_song_info.genre, current_song_info.nodisplay_time_listened);
 	
 	dat_map.insert(current_s.clone(), data);
-	let write_result = fs::write("data.csv", "");
+	let write_result = std::fs::write("data.csv", "");
 
 	if let Err(_) = write_result {
 		return DataSaveError::FileOpenFail;
