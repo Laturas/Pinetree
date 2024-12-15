@@ -10,7 +10,7 @@ use std::{
 	sync::{Arc, Mutex},
 	time::{Duration, SystemTime},
 };
-use rodio::{Sink, Source};
+use rodio::{Source};
 use rand::Rng;
 use id3::{self, TagLike};
 
@@ -24,14 +24,17 @@ fn main() -> Result<(), eframe::Error> {
 		..Default::default()
 	};
 	let app = App::default();
-	let mut sink = app.sink.clone();
 	let mut shared_data = app.appdata.clone();
 	std::thread::spawn(move || {
         loop {
-            std::thread::sleep(Duration::from_secs(1));
-            if sink.lock().unwrap().empty() {
-				let sel_type = shared_data.lock().unwrap().sel_type.clone();
-				let _ = handle_song_end(sel_type, &mut shared_data, &mut sink);
+			std::thread::sleep(Duration::from_secs(1));
+			let (seltype, activate) = {
+				let datlock = shared_data.lock().unwrap();
+				let sel_type = datlock.sel_type.clone();
+				(sel_type, datlock.sink.empty())
+			};
+            if activate {
+				let _ = handle_song_end(seltype, &mut shared_data);
 			}
         }
 	});
@@ -48,6 +51,8 @@ struct SongInfo {
 	genre: String,
 	nodisplay_time_listened: u128,
 }
+
+unsafe impl Send for SharedAppData {}
 
 impl Default for SongInfo {
 	fn default() -> Self {
@@ -81,6 +86,9 @@ struct SharedAppData {
 	current_song_info: SongInfo,
 	dat_map: HashMap<String, String>,
 	song_data_exists: bool,
+
+	_stream: rodio::OutputStream, // THIS HAS TO EXIST otherwise the lifetime causes the program to crash
+	sink: rodio::Sink,
 }
 
 impl Default for SharedAppData {
@@ -124,7 +132,12 @@ impl Default for SharedAppData {
 		} else {
 			data_found = false;
 		}
+		let (i1, i2) = rodio::OutputStream::try_default().unwrap();
+		
+		
 		Self {
+			_stream: i1,
+			sink: rodio::Sink::try_new(&i2).unwrap(),
 			sel_type: SelectionType::None,
 			cur_song_index: 0,
 			songs_list: songls,
@@ -140,7 +153,6 @@ impl Default for SharedAppData {
 }
 
 struct App {
-	sink: Arc<Mutex<rodio::Sink>>,
 	appdata: Arc<Mutex<SharedAppData>>,
 	
 	// Not accessed from other threads
@@ -148,17 +160,13 @@ struct App {
 	error: String,
 	volume: f32,
 	save_data_message: DataSaveError,
-
-	_stream: rodio::OutputStream, // THIS HAS TO EXIST otherwise the lifetime causes the program to crash
 }
 
 impl Default for App {
 	fn default() -> Self {
-		let (i1, i2) = rodio::OutputStream::try_default().unwrap();
+		
 		
 		Self {
-			_stream: i1,
-			sink: Arc::new(Mutex::new(rodio::Sink::try_new(&i2).unwrap())),
 			appdata: Arc::new(Mutex::new(SharedAppData::default())),
 			search_text: format!(""),
 			error: format!(""),
@@ -260,7 +268,7 @@ impl eframe::App for App {
 							};
 							
 							self.save_data_message = DataSaveError::NoError;
-							self.error = play_song(&mut self.appdata, &mut self.sink, res.0, &res.1);
+							self.error = play_song(&mut self.appdata, res.0, &res.1);
 						} else {
 							let appdata = self.appdata.lock().unwrap();
 							if appdata.songs_list.len() == 0 {
@@ -359,7 +367,7 @@ impl eframe::App for App {
 				
 				// If you know of a way of combining these let me know, cuz I don't know a better way.
 				if let Some(song_name) = appdata.songs_list.get(appdata.cur_song_index as usize)  {
-					if !self.sink.lock().unwrap().empty() {
+					if !appdata.sink.empty() {
 						ui.label(format!("Currently Playing: {}", song_name));
 					} else {
 						ui.label(format!("No song currently playing"));
@@ -392,7 +400,7 @@ impl eframe::App for App {
 							let reader = BufReader::new(open_file);
 							
 							self.save_data_message = DataSaveError::NoError;
-							self.error = play_song(&mut self.appdata, &mut self.sink, reader, &fp);
+							self.error = play_song(&mut self.appdata, reader, &fp);
 						}
 						else {
 							self.error = format!("File not found: {}", &fp);
@@ -401,15 +409,15 @@ impl eframe::App for App {
 				}
 				// Scope here to prevent a deadlock
 				{
-					let sink = self.sink.lock().unwrap();
-					match sink.is_paused() {
+					match self.appdata.lock().unwrap().sink.is_paused() {
 						true => if ui.button("Unpause").clicked() {
-							sink.play();
-							self.appdata.lock().unwrap().start_system = SystemTime::now()
+							let mut ad = self.appdata.lock().unwrap();
+							ad.sink.play();
+							ad.start_system = SystemTime::now()
 						},
 						false => if ui.button("Pause").clicked() {
-							sink.pause();
 							let mut appdata = self.appdata.lock().unwrap();
+							appdata.sink.pause();
 							appdata.current_song_info.nodisplay_time_listened += appdata.start_system.elapsed().unwrap().as_millis();
 							let sindex = appdata.cur_song_index;
 							if appdata.songs_list.len() != 0 {
@@ -425,7 +433,7 @@ impl eframe::App for App {
 					appdata.position = 0;
 					appdata.start_system = SystemTime::now();
 					appdata.start_milis = 0;
-					self.sink.lock().unwrap().skip_one();
+					appdata.sink.skip_one();
 				}
 				
 				let og_spacing = ui.spacing().slider_width;
@@ -436,7 +444,7 @@ impl eframe::App for App {
 				let dragged = {
 					let mut slappdata = self.appdata.lock().unwrap();
 
-					let secs = self.sink.lock().unwrap().get_pos().as_millis() / 1000;
+					let secs = slappdata.sink.get_pos().as_millis() / 1000;
 					let max_duration = slappdata.total_duration;
 					
 					let seeker = ui.add(
@@ -454,20 +462,22 @@ impl eframe::App for App {
 				// This is to prevent an issue that would cause an infinite loop somehow
 				if dragged {
 					let mut appdata = self.appdata.lock().unwrap();
-					let _ = self.sink.lock().unwrap().try_seek(Duration::from_millis(appdata.position));
+					let _ = appdata.sink.try_seek(Duration::from_millis(appdata.position));
 					appdata.current_song_info.nodisplay_time_listened += appdata.start_system.elapsed().unwrap().as_millis();
 					appdata.start_system = SystemTime::now();
 					appdata.start_milis = appdata.position;
 				} else {
-					let empt = self.sink.lock().unwrap().empty();
+					let empt = self.appdata.lock().unwrap().sink.empty();
 					if empt {
 						let sel_type = self.appdata.lock().unwrap().sel_type.clone();
-						self.error = handle_song_end(sel_type, &mut self.appdata, &mut self.sink);
+						self.error = handle_song_end(sel_type, &mut self.appdata);
 					}
 				}
-				let sink = self.sink.lock().unwrap();
 				let mut appdata = self.appdata.lock().unwrap();
-				if appdata.position < appdata.total_duration && !sink.is_paused() && !sink.empty() {
+				let pos = appdata.position;
+				let tot_dur = appdata.total_duration;
+				let add_values = {!appdata.sink.is_paused() && !appdata.sink.empty()};
+				if pos < tot_dur && add_values {
 					appdata.position = appdata.start_system.elapsed().unwrap().as_millis() as u64 + appdata.start_milis;
 				}
 				
@@ -479,8 +489,8 @@ impl eframe::App for App {
 					);
 
 					let falloff = volume_curve(self.volume);
-					if sink.volume() != falloff {
-						sink.set_volume(falloff);
+					if appdata.sink.volume() != falloff {
+						appdata.sink.set_volume(falloff);
 					}
 				});
 			});
@@ -500,9 +510,8 @@ fn volume_curve(input: f32) -> f32 {
 	return (input * 6.908).exp() / 1000.0
 }
 
-fn play_song(appdata: &mut Arc<Mutex<SharedAppData>>, sink: &mut Arc<Mutex<Sink>>, reader: BufReader<File>, fp: &str) -> String {
+fn play_song(appdata: &mut Arc<Mutex<SharedAppData>>, reader: BufReader<File>, fp: &str) -> String {
 	let elem = rodio::Decoder::new_mp3(reader);
-	let sink = sink.lock().unwrap();
 	match elem {
 		Ok(a) => {
 			let path = Path::new(&fp);
@@ -518,9 +527,13 @@ fn play_song(appdata: &mut Arc<Mutex<SharedAppData>>, sink: &mut Arc<Mutex<Sink>
 				}
 			}
 			appdata.lock().unwrap().total_duration = mp3_duration::from_path(&path).unwrap().as_millis() as u64;
-			sink.stop();
+			let to_save = {
+				let sink = &appdata.lock().unwrap().sink;
+				sink.stop();
+				!sink.is_paused() && !sink.empty()
+			};
 
-			if !sink.is_paused() && !sink.empty() {
+			if to_save {
 				let mut aplock = appdata.lock().unwrap();
 				aplock.current_song_info.nodisplay_time_listened += aplock.start_system.elapsed().unwrap().as_millis();
 				let sindex = aplock.cur_song_index;
@@ -533,7 +546,7 @@ fn play_song(appdata: &mut Arc<Mutex<SharedAppData>>, sink: &mut Arc<Mutex<Sink>
 			appdata_mut.position = 0;
 			appdata_mut.start_milis = 0;
 
-			sink.append(a.track_position()); 
+			appdata_mut.sink.append(a.track_position()); 
 			format!("")},
 		Err(_) => format!("Error in decoding song :("),
 	}
@@ -632,7 +645,7 @@ fn update_cursong_data(appdata: &mut SharedAppData, song_name: &str) -> bool {
 }
 
 /// Returns error text to be displayed
-fn handle_song_end(sel_type: SelectionType, app: &mut Arc<Mutex<SharedAppData>>, sink: &mut Arc<Mutex<Sink>>) -> String {
+fn handle_song_end(sel_type: SelectionType, app: &mut Arc<Mutex<SharedAppData>>) -> String {
 	return match sel_type {
 			SelectionType::None => {format!("")},
 			SelectionType::Loop => {
@@ -654,7 +667,7 @@ fn handle_song_end(sel_type: SelectionType, app: &mut Arc<Mutex<SharedAppData>>,
 					reader
 				};
 				
-				play_song(app, sink, reader, &fp)
+				play_song(app, reader, &fp)
 			}
 			else {
 				format!("File not found: {}", &fp)
@@ -678,7 +691,7 @@ fn handle_song_end(sel_type: SelectionType, app: &mut Arc<Mutex<SharedAppData>>,
 			let file = File::open(&fp).unwrap();
 			let reader = BufReader::new(file);
 			
-			play_song(app, sink, reader, &fp)
+			play_song(app, reader, &fp)
 		},
 		SelectionType::Random => {
 			let fp = {
@@ -698,7 +711,7 @@ fn handle_song_end(sel_type: SelectionType, app: &mut Arc<Mutex<SharedAppData>>,
 			let file = File::open(&fp).unwrap();
 			let reader = BufReader::new(file);
 			
-			play_song(app, sink, reader, &fp)
+			play_song(app, reader, &fp)
 		},
 	};
 }
