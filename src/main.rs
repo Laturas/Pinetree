@@ -164,8 +164,6 @@ struct App {
 
 impl Default for App {
 	fn default() -> Self {
-		
-		
 		Self {
 			appdata: Arc::new(Mutex::new(SharedAppData::default())),
 			search_text: format!(""),
@@ -409,21 +407,20 @@ impl eframe::App for App {
 				}
 				// Scope here to prevent a deadlock
 				{
-					match self.appdata.lock().unwrap().sink.is_paused() {
+					let mut appdatalock = self.appdata.lock().unwrap();
+					match appdatalock.sink.is_paused() {
 						true => if ui.button("Unpause").clicked() {
-							let mut ad = self.appdata.lock().unwrap();
-							ad.sink.play();
-							ad.start_system = SystemTime::now()
+							appdatalock.sink.play();
+							appdatalock.start_system = SystemTime::now()
 						},
 						false => if ui.button("Pause").clicked() {
-							let mut appdata = self.appdata.lock().unwrap();
-							appdata.sink.pause();
-							appdata.current_song_info.nodisplay_time_listened += appdata.start_system.elapsed().unwrap().as_millis();
-							let sindex = appdata.cur_song_index;
-							if appdata.songs_list.len() != 0 {
-								save_data_noinsert(&mut appdata, sindex);
+							appdatalock.sink.pause();
+							appdatalock.current_song_info.nodisplay_time_listened += appdatalock.start_system.elapsed().unwrap().as_millis();
+							let sindex = appdatalock.cur_song_index;
+							if appdatalock.songs_list.len() != 0 {
+								save_data_noinsert(&mut appdatalock, sindex);
 							}
-							appdata.start_milis = appdata.position;
+							appdatalock.start_milis = appdatalock.position;
 						},
 					}
 				}
