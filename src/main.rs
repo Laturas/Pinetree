@@ -199,6 +199,14 @@ impl eframe::App for App {
 			ui.horizontal(|ui| {
 				if ui.button("Refresh").clicked() {
 					let mut appdata = self.appdata.lock().unwrap();
+
+					// This is incredibly weird but I had to do it this way to satisfy the borrow checker.
+					let old_file_name = appdata.songs_list.get(appdata.cur_song_index);
+					let (ofn, ofn_exists) = if let Some(old_file_name) = old_file_name {
+						((*old_file_name).clone(), true)
+					} else {
+						(String::new(), false)
+					};
 					appdata.songs_list.clear();
 
 					let paths = std::fs::read_dir("songs\\");
@@ -213,6 +221,21 @@ impl eframe::App for App {
 								}
 							}
 						}
+					}
+					// Rare windows W
+					// Windows returns the files sorted alphabetically. But this is platform dependent behavior
+					// To keep songs in order on non-windows platforms we run a sort() call.
+					if !cfg!(windows) {
+						appdata.songs_list.sort();
+					}
+					if ofn_exists {
+						let new_index = appdata.songs_list.binary_search(&ofn);
+						if let Ok(new_index) = new_index {
+							appdata.cur_song_index = new_index;
+						}
+					} else {
+						// This is only in the rare circumstance that the song playing has since been deleted before the refresh.
+						appdata.cur_song_index = 0;
 					}
 				}
 				ui.add(egui::TextEdit::singleline(&mut self.search_text).hint_text("Search..."));
@@ -241,8 +264,8 @@ impl eframe::App for App {
 											ui.label(RichText::new(dir.clone()).underline().strong());
 										}
 										else {
-											ui.set_max_width(245.0);
 											ui.style_mut().wrap_mode = Some(TextWrapMode::Truncate);
+											ui.set_max_width(245.0);
 											ui.label(dir.clone());
 										}
 										if ui.button("▶").clicked() {
@@ -264,7 +287,6 @@ impl eframe::App for App {
 								let fp = format!("songs\\{}", item);
 								let file = File::open(&fp).unwrap();
 
-			
 								appdata.start_system = SystemTime::now();
 								let reader = BufReader::new(file);
 								appdata.song_data_exists = data_exists;
