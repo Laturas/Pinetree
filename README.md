@@ -6,7 +6,8 @@ Right now it may not be the most user-friendly, because I built it originally ju
 - Come up with an actual name lol
 - Create an exe icon
 - Limit the window resizing capability
-- Add a "saved successfully" text upon successful save
+- **\[DONE\]** Add a "saved successfully" text upon successful save
+	- Now make it disappear after a bit
 - **\[DONE\]** Add a warning for when a song doesn't have any saved data associated with it
 - **\[FIXED\]** Either fix the initial getting of the song list, or disable it entirely
 - **\[DONE\]** Remove dead and/or useless ui components
@@ -16,9 +17,10 @@ Right now it may not be the most user-friendly, because I built it originally ju
 - **\[DONE\]** Make volume slider logarithmic
 - **\[DONE\]** Default volume to 0.5
 - **\[DONE\]** Make song timer refresh more often
+- **\[DONE\]** Add long text truncation
 ### Bugfixes
 - **\[FIXED\]** Allow song looping while minimized (This was so hard oh my god)
-- When refreshing the song list, update the song ID for the currently playing song
+- **\[FIXED\]** When refreshing the song list, update the song ID for the currently playing song
 - **\[FIXED\]** Fix searching breaking when typing capital letters
 - Add broader support for non-ascii characters (Unlikely to fix. This could be very difficult)
 - **\[FIXED\]** Fix data not being grabbed when song first loaded.
