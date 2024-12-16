@@ -1,5 +1,19 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")] // hide console window on Windows in release
 
+/** 
+*  REGARDING THE HIGH VOLUME OF unwrap() CALLS:
+*  I have gone through and vetted all of them. Most of the remaining ones fall under one of these categories:
+*  1. unwraps on a lock call - The only way a lock call can return an error is if the other thread panicked.
+*     But I've guaranteed that can't happen, barring the second scenario:
+*  2. unwraps on a system time call. If this fails I do not trust the state of the environment this program is running under,
+*     and I cannot guarantee that it wont break something in one of the libraries I'm using.
+*     It's best to just let the program crash at that point.
+*
+*  There's 2 file opening unwrap() calls I need to handle still, but that's it.
+*  This program is as far as I know, otherwise incapable of crashing.
+**/
+
+
 use eframe::egui::Visuals;
 use egui::{Color32, RichText, TextWrapMode};
 use std::{
@@ -67,7 +81,7 @@ impl Default for SongInfo {
 
 /// Success = ran and completed without error
 /// NoError = Has not run yet
-enum DataSaveError {Success,NoError,FileOpenFail,NoSongToSave}
+enum DataSaveError {Success,NoError,FileOpenFail,NoSongToSave,NonexistentSong}
 
 #[derive(PartialEq)]
 #[derive(Debug)]
@@ -103,8 +117,9 @@ impl Default for SharedAppData {
 			Ok(pat) => {
 				for p in pat {
 					if let Ok(a) = p {
-						let sn = a.file_name().into_string().unwrap();
-						if sn.ends_with(".mp3") {songls.push(sn);}
+						if let Ok(sn) = a.file_name().into_string() {
+							if sn.ends_with(".mp3") {songls.push(sn);}
+						}
 					}
 				}
 			},
@@ -249,9 +264,9 @@ impl eframe::App for App {
 						ui.set_min_width(275.0);
 						let mut song_change_triggered = false;
 						let mut activate_song = 0;
-						let current_song_index_clone = self.appdata.lock().unwrap().cur_song_index;
 						{
 							let mut aplock = self.appdata.lock().unwrap();
+							let current_song_index_clone = aplock.cur_song_index;
 							for (index, dir) in (&mut aplock.songs_list).into_iter().enumerate() {
 								if self.search_text.len() == 0 || 
 									dir.to_ascii_lowercase().contains(&self.search_text.to_ascii_lowercase())
@@ -280,12 +295,15 @@ impl eframe::App for App {
 						if song_change_triggered {
 							let res = {
 								let mut appdata = self.appdata.lock().unwrap();
+
+								// I will just assume this unwrap will never fail.
+								// I cannot comprehend a scenario in which this would be triggered and also be OOB.
 								let mut item = appdata.songs_list.get(activate_song).unwrap().clone();
 								appdata.cur_song_index = activate_song;
 								
 								let data_exists  = update_cursong_data(&mut appdata, &mut item);
 								let fp = format!("songs\\{}", item);
-								let file = File::open(&fp).unwrap();
+								let file = File::open(&fp).unwrap(); // HANDLE THIS at some point. This unwrap actually can fail.
 
 								appdata.start_system = SystemTime::now();
 								let reader = BufReader::new(file);
@@ -344,6 +362,7 @@ impl eframe::App for App {
 	
 							DataSaveError::FileOpenFail => {ui.label("Error: Failed to save data (is data.csv open in another program?)");}
 							DataSaveError::NoSongToSave => {ui.label("Error: There is no active song to save the data for");}
+							DataSaveError::NonexistentSong => {ui.label("Error: The song you tried to exist does not exist");}
 						};
 					});
 					ui.separator();
@@ -418,6 +437,8 @@ impl eframe::App for App {
 					if song_exists {
 						let fp = {
 							let a_lock = self.appdata.lock().unwrap();
+
+							// I similarly cannot comprehend a scenario where this unwrap fails. Cosmic bit flip or something maybe.
 							format!("songs\\{}", a_lock.songs_list.get(a_lock.cur_song_index).unwrap()
 						)};
 						let open_file = File::open(&fp);
@@ -492,9 +513,12 @@ impl eframe::App for App {
 					appdata.start_system = SystemTime::now();
 					appdata.start_milis = appdata.position;
 				} else {
-					let empt = self.appdata.lock().unwrap().sink.empty();
+					let (sel_type, empt) = {
+						let appdata = self.appdata.lock().unwrap();
+						let empt = appdata.sink.empty();
+						(appdata.sel_type.clone(), empt)
+					};
 					if empt {
-						let sel_type = self.appdata.lock().unwrap().sel_type.clone();
 						self.error = handle_song_end(sel_type, &mut self.appdata);
 					}
 				}
@@ -541,17 +565,22 @@ fn play_song(appdata: &mut Arc<Mutex<SharedAppData>>, reader: BufReader<File>, f
 		Ok(a) => {
 			let path = Path::new(&fp);
 			let path_test = mp3_duration::from_path(&path);
-			if let Ok(path_test) = path_test {
-				appdata.lock().unwrap().total_duration = path_test.as_millis() as u64;
-			} else {
-				let t = a.total_duration();
-				if let Some(t) = t {
-					appdata.lock().unwrap().total_duration = t.as_millis() as u64;
+
+			// Scope for anti-deadlock measures.
+			{
+				let mut mut_appdata = appdata.lock().unwrap();
+				if let Ok(path_test) = path_test {
+					mut_appdata.total_duration = path_test.as_millis() as u64;
 				} else {
-					return format!("Error - Couldn't determine song length");
+					let t = a.total_duration();
+					if let Some(t) = t {
+						mut_appdata.total_duration = t.as_millis() as u64;
+					} else {
+						return format!("Error - Couldn't determine song length");
+					}
 				}
+				mut_appdata.total_duration = mp3_duration::from_path(&path).unwrap().as_millis() as u64;
 			}
-			appdata.lock().unwrap().total_duration = mp3_duration::from_path(&path).unwrap().as_millis() as u64;
 			let to_save = {
 				let sink = &appdata.lock().unwrap().sink;
 				sink.stop();
@@ -566,6 +595,7 @@ fn play_song(appdata: &mut Arc<Mutex<SharedAppData>>, reader: BufReader<File>, f
 					&mut aplock, sindex
 				);
 			}
+			// This lock cannot be merged into the one within the if statement because of the save data call.
 			let mut appdata_mut = appdata.lock().unwrap();
 			appdata_mut.start_system = SystemTime::now();
 			appdata_mut.position = 0;
@@ -583,23 +613,24 @@ fn save_data_noinsert(app: &mut SharedAppData, cur_song_index: usize) {
 	let current_song_info = &app.current_song_info;
 	let dat_map = &mut app.dat_map;
 	let songs_list = &app.songs_list;
-	let current_s = songs_list.get(cur_song_index).unwrap();
-	let data = format!("{},{},{},{},{}", current_s, current_song_info.name, current_song_info.artist, current_song_info.genre, current_song_info.nodisplay_time_listened);
-	
-	if dat_map.contains_key(current_s) {
-		dat_map.insert(current_s.clone(), data);
-	} else {
-		return;
-	}
-	let write_result = std::fs::write("data.csv", "");
+	if let Some(current_s) = songs_list.get(cur_song_index) {
+		let data = format!("{},{},{},{},{}", current_s, current_song_info.name, current_song_info.artist, current_song_info.genre, current_song_info.nodisplay_time_listened);
+		
+		if dat_map.contains_key(current_s) {
+			dat_map.insert(current_s.clone(), data);
+		} else {
+			return;
+		}
+		let write_result = std::fs::write("data.csv", "");
 
-	if let Err(_) = write_result {return;}
+		if let Err(_) = write_result {return;}
 
-	let f = OpenOptions::new().append(true).open("data.csv");
+		let f = OpenOptions::new().append(true).open("data.csv");
 
-	if let Ok(mut f) = f {
-		for keys in dat_map.keys() {
-			let _ = writeln!(f, "{}", dat_map.get(keys).unwrap()).is_ok();
+		if let Ok(mut f) = f {
+			for keys in dat_map.keys() {
+				let _ = writeln!(f, "{}", dat_map.get(keys).unwrap()).is_ok();
+			}
 		}
 	}
 }
@@ -611,25 +642,28 @@ fn save_data(app: &mut SharedAppData, cur_song_index: usize) -> DataSaveError {
 	let current_song_info = &app.current_song_info;
 	let dat_map = &mut app.dat_map;
 	let songs_list = &app.songs_list;
-	let current_s = songs_list.get(cur_song_index).unwrap();
-	let data = format!("{},{},{},{},{}", current_s, current_song_info.name, current_song_info.artist, current_song_info.genre, current_song_info.nodisplay_time_listened);
-	
-	dat_map.insert(current_s.clone(), data);
-	let write_result = std::fs::write("data.csv", "");
+	if let Some(current_s) = songs_list.get(cur_song_index) {
+		let data = format!("{},{},{},{},{}", current_s, current_song_info.name, current_song_info.artist, current_song_info.genre, current_song_info.nodisplay_time_listened);
+		
+		dat_map.insert(current_s.clone(), data);
+		let write_result = std::fs::write("data.csv", "");
 
-	if let Err(_) = write_result {
-		return DataSaveError::FileOpenFail;
-	}
-
-	let f = OpenOptions::new().append(true).open("data.csv");
-
-	if let Ok(mut f) = f {
-		for keys in dat_map.keys() {
-			let _ = writeln!(f, "{}", dat_map.get(keys).unwrap()).is_ok();
+		if let Err(_) = write_result {
+			return DataSaveError::FileOpenFail;
 		}
-		return DataSaveError::Success;
+
+		let f = OpenOptions::new().append(true).open("data.csv");
+
+		if let Ok(mut f) = f {
+			for keys in dat_map.keys() {
+				let _ = writeln!(f, "{}", dat_map.get(keys).unwrap()).is_ok();
+			}
+			return DataSaveError::Success;
+		} else {
+			return DataSaveError::FileOpenFail;
+		}
 	} else {
-		return DataSaveError::FileOpenFail;
+		return DataSaveError::NonexistentSong;
 	}
 }
 
@@ -642,10 +676,13 @@ fn initialize_data_map(data_map: &mut HashMap<String,String>) {
 		for line in reader.lines() {
 			if let Ok(line) = line {
 				let collection = line.split(',').collect::<Vec<&str>>();
-	
-				let key = (**collection.get(0).unwrap()).to_string();
-	
-				data_map.insert(key, line);
+
+				// Tried to find a scenario where this fails but came up short. Oh well.
+				// It shouldn't cause a crash or any weird behavior regardless because it's properly handled.
+				if let Some(got_key) = collection.get(0) {
+					let key = (**got_key).to_string();
+					data_map.insert(key, line);
+				}
 			}
 		}
 	}
@@ -663,7 +700,7 @@ fn update_cursong_data(appdata: &mut SharedAppData, song_name: &str) -> bool {
 		appdata.current_song_info.nodisplay_time_listened = (**collection.get(4).unwrap_or(&format!("").as_str())).to_string().parse().unwrap_or(0);
 		return true;
 	} else {
-		appdata.current_song_info.name   = format!("");
+		appdata.current_song_info.name = format!("");
 		appdata.current_song_info.nodisplay_time_listened = 0;
 		return false;
 	}
@@ -676,7 +713,11 @@ fn handle_song_end(sel_type: SelectionType, app: &mut Arc<Mutex<SharedAppData>>)
 			SelectionType::Loop => {
 			let fp = {
 				let appdata = app.lock().unwrap();
-				format!("songs\\{}", appdata.songs_list.get(appdata.cur_song_index).unwrap())
+				if let Some(s) = appdata.songs_list.get(appdata.cur_song_index) {
+					format!("songs\\{}", s)
+				} else {
+					return format!("How did you even cause this error??");
+				}
 			};
 			let open_file = File::open(&fp);
 			if let Ok(open_file) = open_file {
@@ -713,10 +754,13 @@ fn handle_song_end(sel_type: SelectionType, app: &mut Arc<Mutex<SharedAppData>>)
 				appdata.song_data_exists = update_cursong_data(&mut appdata, &mut item);
 				fp
 			};
-			let file = File::open(&fp).unwrap();
-			let reader = BufReader::new(file);
-			
-			play_song(app, reader, &fp)
+			let file = File::open(&fp);
+			if let Ok(file) = file {
+				let reader = BufReader::new(file);
+				play_song(app, reader, &fp)
+			} else {
+				format!("Song you tried to play doesn't exist")
+			}
 		},
 		SelectionType::Random => {
 			let fp = {
@@ -728,15 +772,19 @@ fn handle_song_end(sel_type: SelectionType, app: &mut Arc<Mutex<SharedAppData>>)
 				
 				appdata.cur_song_index = rand::thread_rng().gen_range(0..appdata.songs_list.len());
 				
+				// I won't even bother handling this bruh like come on.
 				let mut item = appdata.songs_list.get(appdata.cur_song_index).unwrap().clone();
 				let fp = format!("songs\\{}", item);
 				appdata.song_data_exists = update_cursong_data(&mut appdata, &mut item);
 				fp
 			};
-			let file = File::open(&fp).unwrap();
-			let reader = BufReader::new(file);
-			
-			play_song(app, reader, &fp)
+			let file = File::open(&fp);
+			if let Ok(file) = file {
+				let reader = BufReader::new(file);
+				play_song(app, reader, &fp)
+			} else {
+				format!("Song you tried to play doesn't exist")
+			}
 		},
 	};
 }

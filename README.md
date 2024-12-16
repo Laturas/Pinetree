@@ -25,7 +25,8 @@ Right now it may not be the most user-friendly, because I built it originally ju
 - Add broader support for non-ascii characters (Unlikely to fix. This could be very difficult)
 - **\[FIXED\]** Fix data not being grabbed when song first loaded.
 - **\[FIXED\]** Fix desync between timer and position within the song when dragging to the end
-- There's a lot of `unwrap()` calls left that need to be handled/vetted.
+- **\[MOSTLY FIXED\]** There's a lot of `unwrap()` calls left that need to be handled/vetted.
+	- Note: There are still like 40, but most I will not be handling. There's a comment at the top of main.rs that explains why.
 ### Features
 - Allow song grouping into folders
 - **\[ADDED\]** Create shuffle feature and in-order playing
