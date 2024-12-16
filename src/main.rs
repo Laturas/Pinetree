@@ -1,7 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")] // hide console window on Windows in release
 
-use eframe::{egui::Visuals};
-use egui::{Color32, RichText};
+use eframe::egui::Visuals;
+use egui::{Color32, RichText, TextWrapMode};
 use std::{
 	collections::HashMap,
 	fs::{File, OpenOptions},
@@ -10,7 +10,7 @@ use std::{
 	sync::{Arc, Mutex},
 	time::{Duration, SystemTime},
 };
-use rodio::{Source};
+use rodio::Source;
 use rand::Rng;
 use id3::{self, TagLike};
 
@@ -236,9 +236,15 @@ impl eframe::App for App {
 									let mut clicked = false;
 									ui.horizontal(|ui| {
 										if current_song_index_clone == index {
+											ui.set_max_width(245.0);
+											ui.style_mut().wrap_mode = Some(TextWrapMode::Truncate);
 											ui.label(RichText::new(dir.clone()).underline().strong());
 										}
-										else {ui.label(dir.clone());}
+										else {
+											ui.set_max_width(245.0);
+											ui.style_mut().wrap_mode = Some(TextWrapMode::Truncate);
+											ui.label(dir.clone());
+										}
 										if ui.button("▶").clicked() {
 											song_change_triggered = true;
 											clicked = true;
