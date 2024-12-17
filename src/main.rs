@@ -13,7 +13,6 @@
 *  This program is as far as I know, otherwise incapable of crashing.
 **/
 
-
 use eframe::egui::Visuals;
 use egui::{Color32, RichText, TextWrapMode};
 use std::{
@@ -264,50 +263,67 @@ impl eframe::App for App {
 			ui.horizontal(|ui| {
 				ui.set_min_height(200.0);
 				ui.vertical(|ui| {
-					egui::ScrollArea::vertical().show(ui, |ui| {
+					let mut use_search_results = {
+						let aplock = self.appdata.lock().unwrap();
+						self.search_text.len() != 0 && self.search_text == aplock.search_text_results
+					};
+					let dont_search = self.search_text.len() == 0;
+
+					let total = 
+					if use_search_results {self.appdata.lock().unwrap().search_results.len()} 
+					else {
+						if dont_search {
+							let aplock = self.appdata.lock().unwrap();
+							aplock.songs_list.len()
+						} else {
+							let mut aplock = self.appdata.lock().unwrap();
+							let mut new_search_results: Vec<usize> = Vec::new();
+							aplock.search_results.clear();
+							for (index, dir) in (&aplock.songs_list).into_iter().enumerate() {
+								if (dir.to_lowercase()).contains(&self.search_text.to_lowercase()) {
+									new_search_results.push(index);
+								}
+							}
+							use_search_results = true;
+							aplock.search_text_results = self.search_text.clone();
+							aplock.search_results = new_search_results;
+							aplock.search_results.len()
+						}
+					};
+					egui::ScrollArea::vertical().show_rows(ui, 16.0, total,|ui, row_range| {
 						ui.set_max_width(275.0);
 						ui.set_min_width(275.0);
 						let mut song_change_triggered = false;
 						let mut activate_song = 0;
 						{
-							let mut aplock = self.appdata.lock().unwrap();
+							let aplock = self.appdata.lock().unwrap();
 							let current_song_index_clone = aplock.cur_song_index;
-							let use_search_results = self.search_text.len() != 0 && self.search_text == aplock.search_text_results;
-							let dont_search = self.search_text.len() == 0;
 
-							// We are caching the search results when it's changed to prevent doing a linear search every frame.
-							let mut new_search_results: Vec<usize> = Vec::new();
 							if use_search_results {
-								for index in (&aplock.search_results).into_iter() {
-									if !dont_search {new_search_results.push(*index);}
-
-									let dir = aplock.songs_list.get(*index).unwrap();
-									if render_song_entry_ui_element(ui, *index, current_song_index_clone, dir, &mut activate_song) {
+								// Fast path
+								for row in row_range {
+									let index = *aplock.search_results.get(row).unwrap();
+									let dir = aplock.songs_list.get(index).unwrap();
+									if render_song_entry_ui_element(ui, index, current_song_index_clone, dir, &mut activate_song) {
 										song_change_triggered = true;
+										activate_song = index;
 									}
 								}
 							} else {
-								for (index, dir) in (&aplock.songs_list).into_iter().enumerate() {
-									if  dont_search ||
-										dir.to_ascii_lowercase().contains(&self.search_text.to_ascii_lowercase())
-									{
-										if !dont_search {new_search_results.push(index);}
-										if render_song_entry_ui_element(ui, index, current_song_index_clone, dir, &mut activate_song) {
-											song_change_triggered = true;
-										}
+								// Slow path
+								for row in row_range {
+									let dir = aplock.songs_list.get(row).unwrap();
+									if render_song_entry_ui_element(ui, row, current_song_index_clone, dir, &mut activate_song) {
+										song_change_triggered = true;
+										activate_song = row;
 									}
 								}
-							}
-
-							if !dont_search {
-								aplock.search_results = new_search_results;
-								aplock.search_text_results = self.search_text.clone();
 							}
 						}
 						if song_change_triggered {
 							let res = {
 								let mut appdata = self.appdata.lock().unwrap();
-
+	
 								// I will just assume this unwrap will never fail.
 								// I cannot comprehend a scenario in which this would be triggered and also be OOB.
 								let mut item = appdata.songs_list.get(activate_song).unwrap().clone();
@@ -316,7 +332,7 @@ impl eframe::App for App {
 								let data_exists  = update_cursong_data(&mut appdata, &mut item);
 								let fp = format!("songs\\{}", item);
 								let file = File::open(&fp).unwrap(); // HANDLE THIS at some point. This unwrap actually can fail.
-
+	
 								appdata.start_system = SystemTime::now();
 								let reader = BufReader::new(file);
 								appdata.song_data_exists = data_exists;
@@ -815,7 +831,7 @@ fn handle_song_end(sel_type: SelectionType, app: &mut Arc<Mutex<SharedAppData>>)
 	};
 }
 
-fn render_song_entry_ui_element(ui: &mut egui::Ui, index: usize, current_song_index: usize, dir: &String,
+fn render_song_entry_ui_element(ui: &mut egui::Ui, index: usize, current_song_index: usize, dir: &str,
 	activate_song: &mut usize) -> bool
 {
 	let mut return_value= false;

@@ -33,7 +33,7 @@ Right now it may not be the most user-friendly, because I built it originally ju
 - Maybe add speeding up/slowing down of audio?
 ### Optimization
 - **\[DONE\]** Cache search results into a separate vec to avoid having to linear search each redraw
-- Optimize large scroll areas (somehow???)
+- **\[DONE\]** Optimize large scroll areas (somehow??? (nvm it was actually really easy))
 ### Other
 - Create a user manual/documentation
 - Make a download page
