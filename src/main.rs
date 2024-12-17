@@ -489,11 +489,17 @@ impl eframe::App for App {
 				}
 				
 				if ui.button("Stop").clicked() {
+					let sel_type = {
+						let mut appdata = self.appdata.lock().unwrap();
+						appdata.position = 0;
+						appdata.sink.stop();
+						appdata.sel_type.clone()
+					};
+					self.error = handle_song_end(sel_type, &mut self.appdata);
+					
 					let mut appdata = self.appdata.lock().unwrap();
-					appdata.position = 0;
 					appdata.start_system = SystemTime::now();
 					appdata.start_milis = 0;
-					appdata.sink.skip_one();
 				}
 				
 				let og_spacing = ui.spacing().slider_width;
