@@ -90,6 +90,8 @@ enum SelectionType {None,Loop,Random,Next}
 
 // This is everything that needs to be shared across threads
 struct SharedAppData {
+	search_text_results: String,
+	search_results: Vec<usize>,
 	sel_type: SelectionType,
 	cur_song_index: usize,
 	songs_list: Vec<String>,
@@ -151,6 +153,8 @@ impl Default for SharedAppData {
 		
 		
 		Self {
+			search_text_results: String::new(),
+			search_results: Vec::new(),
 			_stream: i1,
 			sink: rodio::Sink::try_new(&i2).unwrap(),
 			sel_type: SelectionType::None,
@@ -252,6 +256,7 @@ impl eframe::App for App {
 						// This is only in the rare circumstance that the song playing has since been deleted before the refresh.
 						appdata.cur_song_index = 0;
 					}
+					
 				}
 				ui.add(egui::TextEdit::singleline(&mut self.search_text).hint_text("Search..."));
 			});
@@ -267,29 +272,36 @@ impl eframe::App for App {
 						{
 							let mut aplock = self.appdata.lock().unwrap();
 							let current_song_index_clone = aplock.cur_song_index;
-							for (index, dir) in (&mut aplock.songs_list).into_iter().enumerate() {
-								if self.search_text.len() == 0 || 
-									dir.to_ascii_lowercase().contains(&self.search_text.to_ascii_lowercase())
-								{
-									let mut clicked = false;
-									ui.horizontal(|ui| {
-										if current_song_index_clone == index {
-											ui.set_max_width(245.0);
-											ui.style_mut().wrap_mode = Some(TextWrapMode::Truncate);
-											ui.label(RichText::new(dir.clone()).underline().strong());
-										}
-										else {
-											ui.style_mut().wrap_mode = Some(TextWrapMode::Truncate);
-											ui.set_max_width(245.0);
-											ui.label(dir.clone());
-										}
-										if ui.button("▶").clicked() {
-											song_change_triggered = true;
-											clicked = true;
-											activate_song = index;
-										}
-									});
+							let use_search_results = self.search_text.len() != 0 && self.search_text == aplock.search_text_results;
+							let dont_search = self.search_text.len() == 0;
+
+							// We are caching the search results when it's changed to prevent doing a linear search every frame.
+							let mut new_search_results: Vec<usize> = Vec::new();
+							if use_search_results {
+								for index in (&aplock.search_results).into_iter() {
+									if !dont_search {new_search_results.push(*index);}
+
+									let dir = aplock.songs_list.get(*index).unwrap();
+									if render_song_entry_ui_element(ui, *index, current_song_index_clone, dir, &mut activate_song) {
+										song_change_triggered = true;
+									}
 								}
+							} else {
+								for (index, dir) in (&aplock.songs_list).into_iter().enumerate() {
+									if  dont_search ||
+										dir.to_ascii_lowercase().contains(&self.search_text.to_ascii_lowercase())
+									{
+										if !dont_search {new_search_results.push(index);}
+										if render_song_entry_ui_element(ui, index, current_song_index_clone, dir, &mut activate_song) {
+											song_change_triggered = true;
+										}
+									}
+								}
+							}
+
+							if !dont_search {
+								aplock.search_results = new_search_results;
+								aplock.search_text_results = self.search_text.clone();
 							}
 						}
 						if song_change_triggered {
@@ -795,4 +807,28 @@ fn handle_song_end(sel_type: SelectionType, app: &mut Arc<Mutex<SharedAppData>>)
 			}
 		},
 	};
+}
+
+fn render_song_entry_ui_element(ui: &mut egui::Ui, index: usize, current_song_index: usize, dir: &String,
+	activate_song: &mut usize) -> bool
+{
+	let mut return_value= false;
+	ui.horizontal(|ui| {
+		if current_song_index == index {
+			ui.set_max_width(245.0);
+			ui.style_mut().wrap_mode = Some(TextWrapMode::Truncate);
+			ui.label(RichText::new(dir).underline().strong());
+		}
+		else {
+			ui.style_mut().wrap_mode = Some(TextWrapMode::Truncate);
+			ui.set_max_width(245.0);
+			ui.label(dir);
+		}
+		if ui.button("▶").clicked() {
+			
+			*activate_song = index;
+			return_value = true;
+		}
+	});
+	return return_value;
 }

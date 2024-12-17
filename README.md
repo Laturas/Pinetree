@@ -32,7 +32,8 @@ Right now it may not be the most user-friendly, because I built it originally ju
 - **\[ADDED\]** Create shuffle feature and in-order playing
 - Maybe add speeding up/slowing down of audio?
 ### Optimization
-- Cache search results into a separate vec to avoid having to linear search each redraw
+- **\[DONE\]** Cache search results into a separate vec to avoid having to linear search each redraw
+- Optimize large scroll areas (somehow???)
 ### Other
 - Create a user manual/documentation
 - Make a download page
