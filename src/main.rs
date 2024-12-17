@@ -81,7 +81,7 @@ impl Default for SongInfo {
 
 /// Success = ran and completed without error
 /// NoError = Has not run yet
-enum DataSaveError {Success,NoError,FileOpenFail,NoSongToSave,NonexistentSong}
+enum DataSaveError {Success,NoError,FileOpenFail,NoSongToSave,NonexistentSong,IllegalChar}
 
 #[derive(PartialEq)]
 #[derive(Debug)]
@@ -323,10 +323,9 @@ impl eframe::App for App {
 				});
 				
 				ui.vertical(|ui| {
-					ui.set_max_width(225.0);
-					ui.set_min_width(225.0);
+					ui.set_max_width(250.0);
+					ui.set_min_width(250.0);
 					let mut appdata = self.appdata.lock().unwrap();
-					ui.set_max_width(200.0);
 					ui.vertical_centered(|ui| {
 						ui.heading("Song Info");
 					});
@@ -358,15 +357,16 @@ impl eframe::App for App {
 						}
 						match self.save_data_message {
 							DataSaveError::NoError => (),
-							DataSaveError::Success => {ui.label("Data saved successfully");},
+							DataSaveError::Success => {ui.label("Data saved successfully").on_hover_cursor(egui::CursorIcon::Default);},
 	
-							DataSaveError::FileOpenFail => {ui.label("Error: Failed to save data (is data.csv open in another program?)");}
-							DataSaveError::NoSongToSave => {ui.label("Error: There is no active song to save the data for");}
-							DataSaveError::NonexistentSong => {ui.label("Error: The song you tried to exist does not exist");}
+							DataSaveError::FileOpenFail => {ui.label("Error: Couldn't open file").on_hover_text("Couldn't open the file to save the data (is data.csv open in another program?)").on_hover_cursor(egui::CursorIcon::Default);}
+							DataSaveError::NoSongToSave => {ui.label("Error: No active song").on_hover_text("There is no active song to save the data for").on_hover_cursor(egui::CursorIcon::Default);}
+							DataSaveError::NonexistentSong => {ui.label("Error: Song doesn't exist").on_hover_text("The song you tried to save does not exist").on_hover_cursor(egui::CursorIcon::Default);}
+							DataSaveError::IllegalChar => {ui.label("Fields can't have commas (,)").on_hover_text("Data is stored in the csv format, and storing commas would break the parsing.").on_hover_cursor(egui::CursorIcon::Default);}
 						};
 					});
 					ui.separator();
-					ui.vertical_centered(|ui| {
+					ui.vertical_centered_justified(|ui| {
 						ui.heading("Metadata");
 					});
 					
@@ -376,8 +376,8 @@ impl eframe::App for App {
 						stroke: egui::Stroke::new(1.0,Color32::DARK_GRAY),
 						..Default::default()
 					}.fill(Color32::BLACK).show(ui, |ui| {
-						ui.set_max_width(225.0);
-						ui.set_min_width(225.0);
+						ui.set_max_width(250.0);
+						ui.set_min_width(250.0);
 						//ui.style_mut().wrap_mode = Some(TextWrapMode::Truncate);
 						let item = appdata.songs_list.get(appdata.cur_song_index);
 						let tag = if let Some(item) = item {let fp = format!("songs\\{}", item); Some(id3::Tag::read_from_path(&fp))} else {None};
@@ -387,6 +387,8 @@ impl eframe::App for App {
 						if let Some(tag) = tag {
 							if let Ok(tag) = tag {
 								egui::ScrollArea::vertical().show(ui, |ui| {
+									ui.set_max_width(250.0);
+									ui.set_min_width(250.0);
 									if let Some(artist) = tag.artist() {
 										ui.label(egui::RichText::new(format!("Artist: {}", artist)).background_color(Color32::BLACK).size(13.0).line_height(Some(16.0)));
 									}
@@ -643,6 +645,12 @@ fn save_data(app: &mut SharedAppData, cur_song_index: usize) -> DataSaveError {
 	let dat_map = &mut app.dat_map;
 	let songs_list = &app.songs_list;
 	if let Some(current_s) = songs_list.get(cur_song_index) {
+		if current_song_info.name.contains(',') ||
+			current_song_info.artist.contains(',') ||
+			current_song_info.genre.contains(',')
+		{
+			return DataSaveError::IllegalChar;
+		}
 		let data = format!("{},{},{},{},{}", current_s, current_song_info.name, current_song_info.artist, current_song_info.genre, current_song_info.nodisplay_time_listened);
 		
 		dat_map.insert(current_s.clone(), data);
