@@ -104,6 +104,7 @@ struct SharedAppData {
 
 	_stream: rodio::OutputStream, // THIS HAS TO EXIST otherwise the lifetime causes the program to crash
 	sink: rodio::Sink,
+	
 }
 
 impl Default for SharedAppData {
@@ -178,6 +179,7 @@ struct App {
 	error: String,
 	volume: f32,
 	save_data_message: DataSaveError,
+	fonts_added: bool,
 }
 
 impl Default for App {
@@ -188,12 +190,16 @@ impl Default for App {
 			error: format!(""),
 			volume: 0.5,
 			save_data_message: DataSaveError::NoError,
+			fonts_added: false,
 		}
 	}
 }
 
 impl eframe::App for App {
 	fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+		if !self.fonts_added {
+			add_font(ctx);
+		}
 		ctx.request_repaint_after(Duration::from_millis(250));
 		ctx.set_visuals(Visuals::dark());
 		ctx.set_pixels_per_point(1.33);
@@ -215,7 +221,11 @@ impl eframe::App for App {
 				//ui.checkbox(&mut self.loopy, "Loop songs on finish");
 			});
 			ui.horizontal(|ui| {
-				if ui.button("Refresh").clicked() {
+				if ui.button("Refresh").on_hover_text("Reloads the current list of songs").clicked() {
+
+					// Not resetting this could break things in a billion tiny edge cases and I am NOT handling that.
+					self.search_text = format!("");
+					
 					let mut appdata = self.appdata.lock().unwrap();
 
 					// This is incredibly weird but I had to do it this way to satisfy the borrow checker.
@@ -295,7 +305,7 @@ impl eframe::App for App {
 						ui.set_min_width(275.0);
 						let mut song_change_triggered = false;
 						let mut activate_song = 0;
-						{
+						let prev_song_index = {
 							let aplock = self.appdata.lock().unwrap();
 							let current_song_index_clone = aplock.cur_song_index;
 
@@ -312,6 +322,7 @@ impl eframe::App for App {
 							} else {
 								// Slow path
 								for row in row_range {
+									// This is guaranteed to work because row_range is bounded from above by the length of songs_list.
 									let dir = aplock.songs_list.get(row).unwrap();
 									if render_song_entry_ui_element(ui, row, current_song_index_clone, dir, &mut activate_song) {
 										song_change_triggered = true;
@@ -319,20 +330,35 @@ impl eframe::App for App {
 									}
 								}
 							}
-						}
+							current_song_index_clone
+						};
 						if song_change_triggered {
 							let res = {
-								let mut appdata = self.appdata.lock().unwrap();
 	
 								// I will just assume this unwrap will never fail.
 								// I cannot comprehend a scenario in which this would be triggered and also be OOB.
-								let mut item = appdata.songs_list.get(activate_song).unwrap().clone();
-								appdata.cur_song_index = activate_song;
+								let mut item = self.appdata.lock().unwrap().songs_list.get(activate_song).unwrap().clone();
+								{
+									let mut appdata = self.appdata.lock().unwrap();
+
+									if !appdata.sink.is_paused() && !appdata.sink.empty() {
+										appdata.current_song_info.nodisplay_time_listened += appdata.start_system.elapsed().unwrap().as_millis();
+									}
+									save_data_noinsert(&mut appdata, prev_song_index);
+									appdata.cur_song_index = activate_song;
+								}
 								
-								let data_exists  = update_cursong_data(&mut appdata, &mut item);
+								let data_exists  = {
+									let mut appdata = self.appdata.lock().unwrap();
+									update_cursong_data(&mut appdata, &mut item)
+								};
+								
 								let fp = format!("songs\\{}", item);
 								let file = File::open(&fp).unwrap(); // HANDLE THIS at some point. This unwrap actually can fail.
-	
+								
+								let mut appdata = self.appdata.lock().unwrap();
+
+								
 								appdata.start_system = SystemTime::now();
 								let reader = BufReader::new(file);
 								appdata.song_data_exists = data_exists;
@@ -370,7 +396,7 @@ impl eframe::App for App {
 						ui.text_edit_singleline(&mut appdata.current_song_info.genre).labelled_by(genre_label.id);
 					});
 					ui.horizontal(|ui| {
-						if ui.button("Save").clicked() {
+						if ui.button("Save").on_hover_text("Saves the data to a file").clicked() {
 							let sindex = appdata.cur_song_index;
 							self.save_data_message = save_data(
 								&mut appdata, sindex
@@ -853,4 +879,23 @@ fn render_song_entry_ui_element(ui: &mut egui::Ui, index: usize, current_song_in
 		}
 	});
 	return return_value;
+}
+
+
+// Demonstrates how to add a font to the existing ones
+fn add_font(ctx: &egui::Context) {
+	let mut fonts = egui::FontDefinitions::default();
+
+	fonts.font_data.insert("fallback".to_owned(),
+	egui::FontData::from_static(include_bytes!(
+			"./../fonts/MPLUS1p-Regular.ttf"
+		))
+	);
+
+	fonts
+        .families
+        .entry(egui::FontFamily::Proportional)
+        .or_default()
+        .push("fallback".to_owned());
+    ctx.set_fonts(fonts);
 }

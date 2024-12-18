@@ -22,7 +22,11 @@ Right now it may not be the most user-friendly, because I built it originally ju
 - **\[FIXED\]** Allow song looping while minimized (This was so hard oh my god)
 - **\[FIXED\]** When refreshing the song list, update the song ID for the currently playing song
 - **\[FIXED\]** Fix searching breaking when typing capital letters
-- Add broader support for non-ascii characters (Unlikely to fix. This could be very difficult)
+- **\[PARTIALLY FIXED\]** Add broader support for non-ascii characters
+	- This is only marked partially fixed because it's hard to verify if you have support for every character set you'd need. The goal right now is just to have support for most of the majorly used character sets (If you find broken examples, let me know!)
+	- Added support for Kanji
+	- Verified Cyrillic and nonstandard latin characters work
+	- Want to add Korean and Arabic next
 - **\[FIXED\]** Fix data not being grabbed when song first loaded.
 - **\[FIXED\]** Fix desync between timer and position within the song when dragging to the end
 - **\[MOSTLY FIXED\]** There's a lot of `unwrap()` calls left that need to be handled/vetted.
