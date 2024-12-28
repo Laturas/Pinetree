@@ -14,18 +14,22 @@
 **/
 
 use eframe::egui::Visuals;
-use egui::{Color32, RichText, TextWrapMode};
-use std::{
-	collections::HashMap,
-	fs::{File, OpenOptions},
-	io::{BufRead, BufReader, Write},
-	path::Path,
-	sync::{Arc, Mutex},
-	time::{Duration, SystemTime},
-};
 use rodio::Source;
 use rand::Rng;
-use id3::{self, TagLike};
+use id3::TagLike;
+use egui::{
+	Color32,
+	RichText,
+	TextWrapMode,
+};
+use std::{
+	collections::HashMap,
+	path::Path,
+	fs::{File, OpenOptions},
+	sync::{Arc, Mutex},
+	time::{Duration, SystemTime},
+	io::{BufRead, BufReader, Write},
+};
 
 // This is a really stupid dependency but as it turns out I guess this is a non-trivial problem???
 // Rodio's built in functionality for this just doesn't work most of the time for some reason.
@@ -214,11 +218,10 @@ impl eframe::App for App {
 					.show_ui(ui, |ui| {
 						ui.selectable_value(&mut appdata.sel_type, SelectionType::None, "None");
 						ui.selectable_value(&mut appdata.sel_type, SelectionType::Loop, "Loop");
-						ui.selectable_value(&mut appdata.sel_type, SelectionType::Random, "Random");
+						ui.selectable_value(&mut appdata.sel_type, SelectionType::Random, "Shuffle");
 						ui.selectable_value(&mut appdata.sel_type, SelectionType::Next, "Next");
 					}
 				);
-				//ui.checkbox(&mut self.loopy, "Loop songs on finish");
 			});
 			ui.horizontal(|ui| {
 				if ui.button("Refresh").on_hover_text("Reloads the current list of songs").clicked() {
@@ -530,7 +533,7 @@ impl eframe::App for App {
 					}
 				}
 				
-				if ui.button("Stop").clicked() {
+				if ui.button("Skip").clicked() {
 					let sel_type = {
 						let mut appdata = self.appdata.lock().unwrap();
 						appdata.position = 0;
