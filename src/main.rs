@@ -229,6 +229,7 @@ impl eframe::App for App {
 
 		egui::CentralPanel::default().show(ctx, |ui| {
 			ui.heading("Kate's Untitled MP3 Player");
+			let mut force_refresh = false;
 			ui.horizontal(|ui| {
 				let mut appdata = self.appdata.lock().unwrap();
 				ui.label("When a song ends: ");
@@ -242,10 +243,14 @@ impl eframe::App for App {
 					}
 				);
 				ui.label("File path:").on_hover_text("Relative to the file path of the executable"); 
-				ui.add(egui::TextEdit::singleline(&mut self.displayonly_song_folder).hint_text("Song folder...")).on_hover_text("Relative to the file path of the executable");
+				let lab = ui.add(egui::TextEdit::singleline(&mut self.displayonly_song_folder).hint_text("Song folder...")).on_hover_text("Relative to the file path of the executable");
+
+				if lab.lost_focus() && lab.ctx.input(|i| i.key_pressed(egui::Key::Enter)) {
+					force_refresh = true;
+				}
 			});
 			ui.horizontal(|ui| {
-				if ui.button("Refresh").on_hover_text("Reloads the current list of songs").clicked() {
+				if force_refresh || ui.button("Refresh").on_hover_text("Reloads the current list of songs").clicked() {
 
 					// Not resetting this could break things in a billion tiny edge cases and I am NOT handling that.
 					self.search_text = format!("");
@@ -377,12 +382,11 @@ impl eframe::App for App {
 									appdata.cur_song_index = activate_song;
 								}
 								
-								let data_exists  = {
+								let (data_exists, fp)  = {
 									let mut appdata = self.appdata.lock().unwrap();
-									update_cursong_data(&mut appdata, &mut item)
+									(update_cursong_data(&mut appdata, &mut item), file_path_build(&appdata.song_folder,&item))
 								};
 								
-								let fp = format!("songs\\{}", item);
 								let file = File::open(&fp).unwrap(); // HANDLE THIS at some point. This unwrap actually can fail.
 								
 								let mut appdata = self.appdata.lock().unwrap();
@@ -463,7 +467,10 @@ impl eframe::App for App {
 						ui.set_min_width(250.0);
 						//ui.style_mut().wrap_mode = Some(TextWrapMode::Truncate);
 						let item = appdata.songs_list.get(appdata.cur_song_index);
-						let tag = if let Some(item) = item {let fp = format!("songs\\{}", item); Some(id3::Tag::read_from_path(&fp))} else {None};
+						let tag = if let Some(item) = item {
+							let fp = file_path_build(&appdata.song_folder,&item);
+							Some(id3::Tag::read_from_path(&fp))
+						} else {None};
 						
 						ui.set_min_height(25.0);
 						ui.set_max_height(25.0);
@@ -524,8 +531,8 @@ impl eframe::App for App {
 							let a_lock = self.appdata.lock().unwrap();
 
 							// I similarly cannot comprehend a scenario where this unwrap fails. Cosmic bit flip or something maybe.
-							format!("songs\\{}", a_lock.songs_list.get(a_lock.cur_song_index).unwrap()
-						)};
+							file_path_build(&a_lock.song_folder,&a_lock.songs_list.get(a_lock.cur_song_index).unwrap())
+						};
 						let open_file = File::open(&fp);
 	
 						if let Ok(open_file) = open_file {
@@ -811,7 +818,7 @@ fn handle_song_end(sel_type: SelectionType, app: &mut Arc<Mutex<SharedAppData>>)
 			let fp = {
 				let appdata = app.lock().unwrap();
 				if let Some(s) = appdata.songs_list.get(appdata.cur_song_index) {
-					format!("songs\\{}", s)
+					file_path_build(&appdata.song_folder,&s)
 				} else {
 					return format!("How did you even cause this error??");
 				}
@@ -847,7 +854,7 @@ fn handle_song_end(sel_type: SelectionType, app: &mut Arc<Mutex<SharedAppData>>)
 				appdata.cur_song_index = if appdata.cur_song_index + 1 >= appdata.songs_list.len() {0} else {appdata.cur_song_index + 1};
 				
 				let mut item = appdata.songs_list.get(appdata.cur_song_index).unwrap().clone();
-				let fp = format!("songs\\{}", item);
+				let fp = file_path_build(&appdata.song_folder,&item);
 				appdata.song_data_exists = update_cursong_data(&mut appdata, &mut item);
 				fp
 			};
@@ -871,7 +878,7 @@ fn handle_song_end(sel_type: SelectionType, app: &mut Arc<Mutex<SharedAppData>>)
 				
 				// I won't even bother handling this bruh like come on.
 				let mut item = appdata.songs_list.get(appdata.cur_song_index).unwrap().clone();
-				let fp = format!("songs\\{}", item);
+				let fp = file_path_build(&appdata.song_folder,&item);
 				appdata.song_data_exists = update_cursong_data(&mut appdata, &mut item);
 				fp
 			};
@@ -927,4 +934,11 @@ fn add_font(ctx: &egui::Context) {
         .or_default()
         .push("fallback".to_owned());
     ctx.set_fonts(fonts);
+}
+fn file_path_build(folder_paths: &str, file_name: &str) -> String {
+	if folder_paths.ends_with('/') || folder_paths.ends_with('\\') {
+		return format!("{}{}", folder_paths, file_name);
+	} else {
+		return format!("{}/{}", folder_paths, file_name);
+	}
 }
