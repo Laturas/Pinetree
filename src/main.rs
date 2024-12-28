@@ -99,6 +99,7 @@ struct SharedAppData {
 	cur_song_index: usize,
 	songs_list: Vec<String>,
 	start_system: SystemTime,
+	song_folder: String,
 	start_milis: u64,
 	position: u64,
 	total_duration: u64,
@@ -114,7 +115,7 @@ struct SharedAppData {
 impl Default for SharedAppData {
 	fn default() -> Self {
 		let mut songls: Vec<String> = vec![];
-		let paths = std::fs::read_dir("songs\\");
+		let paths = std::fs::read_dir("songs/");
 		let mut data_map: HashMap<String,String> = HashMap::new();
 
 		initialize_data_map(&mut data_map);
@@ -165,6 +166,7 @@ impl Default for SharedAppData {
 			cur_song_index: 0,
 			songs_list: songls,
 			start_system: SystemTime::now(),
+			song_folder: format!("songs/"),
 			total_duration: 0,
 			start_milis: 0,
 			position: 0,
@@ -180,21 +182,38 @@ struct App {
 	
 	// Not accessed from other threads
 	search_text: String,
+	genre_filter: String,
+	artist_filter: String,
 	error: String,
 	volume: f32,
 	save_data_message: DataSaveError,
 	fonts_added: bool,
+
+	// There is a good reason I split this into two duplicate fields.
+	//
+	//	1. Updating the song list is a very expensive operation that I don't wanna do on every keystroke (would become VERY laggy, unavoidably).
+	//	2. Updating every keystroke anyways would be pointless because on most of the keystrokes no result would be returned until the typing was finished
+	//	3. I don't want song playing to break while the field is being typed in.
+	//
+	// So, this field stores what is shown in the text field,
+	// and the one in appdata is what's used for any I/O operations and is updated on a refresh call.
+	displayonly_song_folder: String,
 }
 
 impl Default for App {
 	fn default() -> Self {
+		let ad = Arc::new(Mutex::new(SharedAppData::default()));
 		Self {
-			appdata: Arc::new(Mutex::new(SharedAppData::default())),
+			appdata: ad,
 			search_text: format!(""),
+			genre_filter: format!(""),
+			artist_filter: format!(""),
 			error: format!(""),
 			volume: 0.5,
 			save_data_message: DataSaveError::NoError,
 			fonts_added: false,
+
+			displayonly_song_folder: format!("songs/"),
 		}
 	}
 }
@@ -222,6 +241,8 @@ impl eframe::App for App {
 						ui.selectable_value(&mut appdata.sel_type, SelectionType::Next, "Next");
 					}
 				);
+				ui.label("File path:").on_hover_text("Relative to the file path of the executable"); 
+				ui.add(egui::TextEdit::singleline(&mut self.displayonly_song_folder).hint_text("Song folder...")).on_hover_text("Relative to the file path of the executable");
 			});
 			ui.horizontal(|ui| {
 				if ui.button("Refresh").on_hover_text("Reloads the current list of songs").clicked() {
@@ -230,6 +251,7 @@ impl eframe::App for App {
 					self.search_text = format!("");
 					
 					let mut appdata = self.appdata.lock().unwrap();
+					appdata.song_folder = self.displayonly_song_folder.clone();
 
 					// This is incredibly weird but I had to do it this way to satisfy the borrow checker.
 					let old_file_name = appdata.songs_list.get(appdata.cur_song_index);
@@ -240,7 +262,7 @@ impl eframe::App for App {
 					};
 					appdata.songs_list.clear();
 
-					let paths = std::fs::read_dir("songs\\");
+					let paths = std::fs::read_dir(&appdata.song_folder);
 					if let Ok(paths) = paths {
 						for p in paths {
 							if let Ok(a) = p {
@@ -270,7 +292,11 @@ impl eframe::App for App {
 					}
 					
 				}
-				ui.add(egui::TextEdit::singleline(&mut self.search_text).hint_text("Search..."));
+				ui.add(egui::TextEdit::singleline(&mut self.search_text).hint_text("Search...").desired_width(175.0)).on_hover_text("Search for a given file name");
+				
+				ui.label("Filters:");
+				ui.add(egui::TextEdit::singleline(&mut self.genre_filter).hint_text("Genre...").desired_width(130.0)).on_hover_text("Filter songs to those of a specific genre");
+				ui.add(egui::TextEdit::singleline(&mut self.artist_filter).hint_text("Artist...").desired_width(130.0)).on_hover_text("Filter songs to those by a specific artist");
 			});
 			ui.add_space(10.0);
 			ui.horizontal(|ui| {
