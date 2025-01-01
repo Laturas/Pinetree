@@ -198,6 +198,7 @@ struct App {
 	// So, this field stores what is shown in the text field,
 	// and the one in appdata is what's used for any I/O operations and is updated on a refresh call.
 	displayonly_song_folder: String,
+	dirlist: Vec::<String>,
 }
 
 impl Default for App {
@@ -212,6 +213,7 @@ impl Default for App {
 			volume: 0.5,
 			save_data_message: DataSaveError::NoError,
 			fonts_added: false,
+			dirlist: Vec::new(),
 
 			displayonly_song_folder: format!("songs/"),
 		}
@@ -257,7 +259,12 @@ impl eframe::App for App {
 					
 					let mut appdata = self.appdata.lock().unwrap();
 					appdata.song_folder = self.displayonly_song_folder.clone();
-
+					
+					appdata.current_song_info.nodisplay_time_listened += appdata.start_system.elapsed().unwrap().as_millis();
+					appdata.start_system = SystemTime::now();
+					let sindex = appdata.cur_song_index;
+					save_data_noinsert(&mut appdata, sindex);
+					
 					// This is incredibly weird but I had to do it this way to satisfy the borrow checker.
 					let old_file_name = appdata.songs_list.get(appdata.cur_song_index);
 					let (ofn, ofn_exists) = if let Some(old_file_name) = old_file_name {
@@ -266,11 +273,20 @@ impl eframe::App for App {
 						(String::new(), false)
 					};
 					appdata.songs_list.clear();
-
+					
 					let paths = std::fs::read_dir(&appdata.song_folder);
 					if let Ok(paths) = paths {
 						for p in paths {
 							if let Ok(a) = p {
+								
+								if a.file_type().unwrap().is_dir() {
+									// If the file names contain invalid unicode data it's best to just ignore them
+									if let Ok (fname) = a.file_name().into_string() {
+										self.dirlist.push(fname);
+									}
+									continue;
+								}
+								
 								let song_result = a.file_name().into_string();
 								if let Ok(song_result) = song_result {
 									if song_result.ends_with(".mp3") {
@@ -295,7 +311,8 @@ impl eframe::App for App {
 						// This is only in the rare circumstance that the song playing has since been deleted before the refresh.
 						appdata.cur_song_index = 0;
 					}
-					
+					let sn = appdata.songs_list.get(appdata.cur_song_index).unwrap().clone();
+					update_cursong_data(&mut appdata, &sn);
 				}
 				ui.add(egui::TextEdit::singleline(&mut self.search_text).hint_text("Search...").desired_width(175.0)).on_hover_text("Search for a given file name");
 				
@@ -314,8 +331,9 @@ impl eframe::App for App {
 					let dont_search = self.search_text.len() == 0;
 
 					let total = 
-					if use_search_results {self.appdata.lock().unwrap().search_results.len()} 
-					else {
+					if use_search_results {
+						self.appdata.lock().unwrap().search_results.len()
+					} else {
 						if dont_search {
 							let aplock = self.appdata.lock().unwrap();
 							aplock.songs_list.len()
@@ -366,6 +384,7 @@ impl eframe::App for App {
 							}
 							current_song_index_clone
 						};
+						// BUG: Currently the program assumes the previous song is in the same folder which unfortunate transfers song listen duration incorrectly.
 						if song_change_triggered {
 							let res = {
 	
@@ -891,6 +910,37 @@ fn handle_song_end(sel_type: SelectionType, app: &mut Arc<Mutex<SharedAppData>>)
 			}
 		},
 	};
+}
+
+enum DirActivate {
+	// Default - Nothing happens.
+	Inactive,
+	// Adds the songs of this folder to the current song list
+	Add,
+	// Enters this directory as the new current root directory
+	Enter,
+}
+
+/// @param dir_active Bool for whether or not this directory is already added
+fn render_directory_element(ui: &mut egui::Ui, dir_active: bool, text: &str) -> DirActivate {
+	let mut dir_activation = DirActivate::Inactive;
+	ui.horizontal(|ui| {
+		if dir_active {
+			ui.set_max_width(245.0);
+			ui.style_mut().wrap_mode = Some(TextWrapMode::Truncate);
+			ui.label(RichText::new(text).underline().strong());
+		}
+		else {
+			ui.style_mut().wrap_mode = Some(TextWrapMode::Truncate);
+			ui.set_max_width(245.0);
+			ui.label(RichText::new(text).underline());
+		}
+		if ui.button("+").clicked() {
+			
+			dir_activation = DirActivate::Add;
+		}
+	});
+	return dir_activation;
 }
 
 fn render_song_entry_ui_element(ui: &mut egui::Ui, index: usize, current_song_index: usize, dir: &str,
