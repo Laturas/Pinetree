@@ -87,7 +87,7 @@ enum DataSaveError {Success,NoError,FileOpenFail,NoSongToSave,NonexistentSong,Il
 #[derive(PartialEq)]
 #[derive(Debug)]
 #[derive(Clone)]
-enum SelectionType {None,Loop,Random,Next}
+enum SelectionType {None,Loop,Shuffle,Next}
 
 // This is everything that needs to be shared across threads
 struct SharedAppData {
@@ -256,7 +256,7 @@ impl eframe::App for App {
 					.show_ui(ui, |ui| {
 						ui.selectable_value(&mut appdata.sel_type, SelectionType::None, "None");
 						ui.selectable_value(&mut appdata.sel_type, SelectionType::Loop, "Loop");
-						ui.selectable_value(&mut appdata.sel_type, SelectionType::Random, "Shuffle");
+						ui.selectable_value(&mut appdata.sel_type, SelectionType::Shuffle, "Shuffle");
 						ui.selectable_value(&mut appdata.sel_type, SelectionType::Next, "Next");
 					}
 				);
@@ -923,7 +923,7 @@ fn handle_song_end(sel_type: SelectionType, app: &mut Arc<Mutex<SharedAppData>>)
 				format!("Song you tried to play doesn't exist")
 			}
 		},
-		SelectionType::Random => {
+		SelectionType::Shuffle => {
 			let fp = {
 				let mut appdata = app.lock().unwrap();
 				appdata.current_song_info.nodisplay_time_listened += appdata.start_system.elapsed().unwrap().as_millis();
@@ -973,7 +973,7 @@ fn render_directory_element(ui: &mut egui::Ui, dir_active: bool, text: &str) -> 
 			ui.style_mut().wrap_mode = Some(TextWrapMode::Truncate);
 			ui.set_max_width(245.0);
 			ui.scope(|ui| {
-				ui.style_mut().visuals.hyperlink_color = Color32::WHITE;
+				ui.style_mut().visuals.hyperlink_color = Color32::from_rgb(180, 180, 255);
 				if ui.add(egui::Link::new(text)).clicked() {
 					dir_activation = DirActivate::Enter;
 				}
