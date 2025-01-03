@@ -107,7 +107,6 @@ struct SharedAppData {
 
 	_stream: rodio::OutputStream, // THIS HAS TO EXIST otherwise the lifetime causes the program to crash
 	sink: rodio::Sink,
-	
 }
 
 impl Default for SharedAppData {
@@ -269,8 +268,14 @@ impl eframe::App for App {
 				if ui.button("←").on_hover_text_at_pointer("Backs up to the folder above").clicked() {
 					self.displayonly_song_folder = {
 						let last_char = {
-							let last_bslash = self.displayonly_song_folder.rfind('\\');
-							let last_slash = self.displayonly_song_folder.rfind('/');
+							// This is here because otherwise with an extra slash it will back up to the same folder and just delete the slash.
+							let operated_str = if self.displayonly_song_folder.ends_with('/') || self.displayonly_song_folder.ends_with('\\') {
+								&self.displayonly_song_folder[..self.displayonly_song_folder.len() - 1]
+							} else {
+								&self.displayonly_song_folder
+							};
+							let last_bslash = operated_str.rfind('\\');
+							let last_slash = operated_str.rfind('/');
 
 							match (last_bslash, last_slash) {
 								(Some(bslash), Some(slash)) => {
@@ -967,7 +972,6 @@ fn render_directory_element(ui: &mut egui::Ui, dir_active: bool, text: &str) -> 
 		if dir_active {
 			ui.set_max_width(245.0);
 			ui.style_mut().wrap_mode = Some(TextWrapMode::Truncate);
-			//ui.label(RichText::new(text).underline()).on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_ui(|ui| {ui.label(RichText::new(text).underline().strong());});
 		}
 		else {
 			ui.style_mut().wrap_mode = Some(TextWrapMode::Truncate);
