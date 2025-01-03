@@ -874,6 +874,11 @@ fn update_cursong_data(appdata: &mut SharedAppData, song_name: &str) -> bool {
 
 /// Returns error text to be displayed
 fn handle_song_end(sel_type: SelectionType, app: &mut Arc<Mutex<SharedAppData>>) -> String {
+	{
+		if sel_type != SelectionType::None && app.lock().unwrap().songs_list.len() == 0 {
+			return format!("Error: No songs in current directory");
+		}
+	}
 	return match sel_type {
 			SelectionType::None => {format!("")},
 			SelectionType::Loop => {
