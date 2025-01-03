@@ -266,7 +266,7 @@ impl eframe::App for App {
 				if lab.lost_focus() && lab.ctx.input(|i| i.key_pressed(egui::Key::Enter)) {
 					self.force_refresh = true;
 				}
-				if ui.button("←").clicked() {
+				if ui.button("←").on_hover_text_at_pointer("Backs up to the folder above").clicked() {
 					self.displayonly_song_folder = {
 						let last_char = {
 							let last_bslash = self.displayonly_song_folder.rfind('\\');
