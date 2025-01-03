@@ -960,14 +960,14 @@ enum DirActivate {
 	Enter,
 }
 
-/// @param dir_active Bool for whether or not this directory is already added
+/// **dir_active**: Bool for whether or not this directory is already added
 fn render_directory_element(ui: &mut egui::Ui, dir_active: bool, text: &str) -> DirActivate {
 	let mut dir_activation = DirActivate::Inactive;
 	ui.horizontal(|ui| {
 		if dir_active {
 			ui.set_max_width(245.0);
 			ui.style_mut().wrap_mode = Some(TextWrapMode::Truncate);
-			ui.label(RichText::new(text).underline()).on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_ui(|ui| {ui.label(RichText::new(text).underline().strong());});
+			//ui.label(RichText::new(text).underline()).on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_ui(|ui| {ui.label(RichText::new(text).underline().strong());});
 		}
 		else {
 			ui.style_mut().wrap_mode = Some(TextWrapMode::Truncate);
@@ -1069,6 +1069,7 @@ fn refresh_logic(app: &mut App) {
 		for p in paths {
 			if let Ok(a) = p {
 				
+				// I tried to figure out where this .file_type() method could possibly fail, but I have no idea. Maybe platform dependence?
 				if a.file_type().unwrap().is_dir() {
 					// If the file names contain invalid unicode data it's best to just ignore them
 					if let Ok (fname) = a.file_name().into_string() {
