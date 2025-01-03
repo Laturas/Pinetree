@@ -18,9 +18,7 @@ use rodio::Source;
 use rand::Rng;
 use id3::TagLike;
 use egui::{
-	Color32,
-	RichText,
-	TextWrapMode,
+	Color32, RichText, TextWrapMode
 };
 use std::{
 	collections::HashMap,
@@ -188,6 +186,7 @@ struct App {
 	volume: f32,
 	save_data_message: DataSaveError,
 	fonts_added: bool,
+	force_refresh: bool,
 
 	// There is a good reason I split this into two duplicate fields.
 	//
@@ -199,11 +198,27 @@ struct App {
 	// and the one in appdata is what's used for any I/O operations and is updated on a refresh call.
 	displayonly_song_folder: String,
 	dirlist: Vec::<String>,
+	searched_dirlist: Vec::<usize>,
 }
 
 impl Default for App {
 	fn default() -> Self {
 		let ad = Arc::new(Mutex::new(SharedAppData::default()));
+		let mut dirconstructor: Vec<String> = vec![];
+		let paths = std::fs::read_dir("songs/");
+		if let Ok(paths) = paths {
+			for p in paths {
+				if let Ok(p) = p {
+					if p.file_type().unwrap().is_dir() {
+						// If the file names contain invalid unicode data it's best to just ignore them
+						if let Ok (fname) = p.file_name().into_string() {
+							dirconstructor.push(fname);
+						}
+						continue;
+					}
+				}
+			}
+		}
 		Self {
 			appdata: ad,
 			search_text: format!(""),
@@ -213,7 +228,9 @@ impl Default for App {
 			volume: 0.5,
 			save_data_message: DataSaveError::NoError,
 			fonts_added: false,
-			dirlist: Vec::new(),
+			dirlist: dirconstructor,
+			searched_dirlist: Vec::new(),
+			force_refresh: false,
 
 			displayonly_song_folder: format!("songs/"),
 		}
@@ -231,7 +248,6 @@ impl eframe::App for App {
 
 		egui::CentralPanel::default().show(ctx, |ui| {
 			ui.heading("Kate's Untitled MP3 Player");
-			let mut force_refresh = false;
 			ui.horizontal(|ui| {
 				let mut appdata = self.appdata.lock().unwrap();
 				ui.label("When a song ends: ");
@@ -248,71 +264,35 @@ impl eframe::App for App {
 				let lab = ui.add(egui::TextEdit::singleline(&mut self.displayonly_song_folder).hint_text("Song folder...")).on_hover_text("Relative to the file path of the executable");
 
 				if lab.lost_focus() && lab.ctx.input(|i| i.key_pressed(egui::Key::Enter)) {
-					force_refresh = true;
+					self.force_refresh = true;
+				}
+				if ui.button("←").clicked() {
+					self.displayonly_song_folder = {
+						let last_char = {
+							let last_bslash = self.displayonly_song_folder.rfind('\\');
+							let last_slash = self.displayonly_song_folder.rfind('/');
+
+							match (last_bslash, last_slash) {
+								(Some(bslash), Some(slash)) => {
+									if bslash > slash {bslash} else {slash}
+								}
+								(Some(bslash), None) => bslash,
+								(None, Some(slash)) => slash,
+								(None, None) => 0,
+							}
+						};
+						if last_char == 0 {format!("")}
+						else {
+							self.displayonly_song_folder[0..last_char].to_string()
+						}
+					};
+					self.force_refresh = true;
 				}
 			});
 			ui.horizontal(|ui| {
-				if force_refresh || ui.button("Refresh").on_hover_text("Reloads the current list of songs").clicked() {
-
-					// Not resetting this could break things in a billion tiny edge cases and I am NOT handling that.
-					self.search_text = format!("");
-					
-					let mut appdata = self.appdata.lock().unwrap();
-					appdata.song_folder = self.displayonly_song_folder.clone();
-					
-					appdata.current_song_info.nodisplay_time_listened += appdata.start_system.elapsed().unwrap().as_millis();
-					appdata.start_system = SystemTime::now();
-					let sindex = appdata.cur_song_index;
-					save_data_noinsert(&mut appdata, sindex);
-					
-					// This is incredibly weird but I had to do it this way to satisfy the borrow checker.
-					let old_file_name = appdata.songs_list.get(appdata.cur_song_index);
-					let (ofn, ofn_exists) = if let Some(old_file_name) = old_file_name {
-						((*old_file_name).clone(), true)
-					} else {
-						(String::new(), false)
-					};
-					appdata.songs_list.clear();
-					
-					let paths = std::fs::read_dir(&appdata.song_folder);
-					if let Ok(paths) = paths {
-						for p in paths {
-							if let Ok(a) = p {
-								
-								if a.file_type().unwrap().is_dir() {
-									// If the file names contain invalid unicode data it's best to just ignore them
-									if let Ok (fname) = a.file_name().into_string() {
-										self.dirlist.push(fname);
-									}
-									continue;
-								}
-								
-								let song_result = a.file_name().into_string();
-								if let Ok(song_result) = song_result {
-									if song_result.ends_with(".mp3") {
-										appdata.songs_list.push(song_result);
-									}
-								}
-							}
-						}
-					}
-					// Rare windows W
-					// Windows returns the files sorted alphabetically. But this is platform dependent behavior
-					// To keep songs in order on non-windows platforms we run a sort() call.
-					if !cfg!(windows) {
-						appdata.songs_list.sort();
-					}
-					if ofn_exists {
-						let new_index = appdata.songs_list.binary_search(&ofn);
-						if let Ok(new_index) = new_index {
-							appdata.cur_song_index = new_index;
-						}
-					} else {
-						// This is only in the rare circumstance that the song playing has since been deleted before the refresh.
-						appdata.cur_song_index = 0;
-					}
-					let sn = appdata.songs_list.get(appdata.cur_song_index).unwrap().clone();
-					update_cursong_data(&mut appdata, &sn);
+				if self.force_refresh || ui.button("Refresh").on_hover_text("Reloads the current list of songs").clicked() {
+					refresh_logic(self);
+					self.force_refresh = false;
 				}
 				ui.add(egui::TextEdit::singleline(&mut self.search_text).hint_text("Search...").desired_width(175.0)).on_hover_text("Search for a given file name");
 				
@@ -332,53 +312,97 @@ impl eframe::App for App {
 
 					let total = 
 					if use_search_results {
-						self.appdata.lock().unwrap().search_results.len()
+						self.appdata.lock().unwrap().search_results.len() + self.searched_dirlist.len()
 					} else {
 						if dont_search {
 							let aplock = self.appdata.lock().unwrap();
-							aplock.songs_list.len()
+							aplock.songs_list.len() + self.dirlist.len()
 						} else {
 							let mut aplock = self.appdata.lock().unwrap();
 							let mut new_search_results: Vec<usize> = Vec::new();
+							let mut new_dir_search_results: Vec<usize> = Vec::new();
 							aplock.search_results.clear();
+							self.searched_dirlist.clear();
 							for (index, dir) in (&aplock.songs_list).into_iter().enumerate() {
 								if (dir.to_lowercase()).contains(&self.search_text.to_lowercase()) {
 									new_search_results.push(index);
 								}
 							}
+							for (index, dir) in (&self.dirlist).into_iter().enumerate() {
+								if (dir.to_lowercase()).contains(&self.search_text.to_lowercase()) {
+									new_dir_search_results.push(index);
+								}
+							}
 							use_search_results = true;
 							aplock.search_text_results = self.search_text.clone();
 							aplock.search_results = new_search_results;
-							aplock.search_results.len()
+							self.searched_dirlist = new_dir_search_results;
+							aplock.search_results.len() + self.searched_dirlist.len()
 						}
 					};
 					egui::ScrollArea::vertical().show_rows(ui, 16.0, total,|ui, row_range| {
 						ui.set_max_width(275.0);
 						ui.set_min_width(275.0);
 						let mut song_change_triggered = false;
+						let mut directory_activation = DirActivate::Inactive;
+						let mut dirmove_name = String::new();
 						let mut activate_song = 0;
 						let prev_song_index = {
 							let aplock = self.appdata.lock().unwrap();
 							let current_song_index_clone = aplock.cur_song_index;
 
 							if use_search_results {
-								// Fast path
+								let directories_size = self.searched_dirlist.len();
+								let mut chn = self.searched_dirlist.iter().chain(aplock.search_results.iter());
+								let mut first_element_set = false;
+
 								for row in row_range {
-									let index = *aplock.search_results.get(row).unwrap();
-									let dir = aplock.songs_list.get(index).unwrap();
-									if render_song_entry_ui_element(ui, index, current_song_index_clone, dir, &mut activate_song) {
-										song_change_triggered = true;
-										activate_song = index;
+									let song = 
+										if !first_element_set {first_element_set = true; chn.nth(row)}
+										else {chn.next()};
+									
+									if row < directories_size {
+										if let Some(directory_index) = song {
+											let dirname = self.dirlist.get(*directory_index).unwrap();
+											(directory_activation, dirmove_name) = {
+												let tmp = render_directory_element(ui, false, dirname);
+												if tmp == DirActivate::Inactive {(directory_activation, dirmove_name)} else {(tmp, dirname.clone())}
+											};
+										}
+									} else {
+										if let Some(song_index) = song {
+											let songname = aplock.songs_list.get(*song_index).unwrap();
+											if render_song_entry_ui_element(ui, *song_index, current_song_index_clone, songname, &mut activate_song) {
+												song_change_triggered = true;
+												activate_song = *song_index;
+											}
+										}
 									}
 								}
 							} else {
-								// Slow path
+								let directories_size = self.dirlist.len();
+								let mut chn = self.dirlist.iter().chain(aplock.songs_list.iter());
+								let mut first_element_set = false;
+
 								for row in row_range {
-									// This is guaranteed to work because row_range is bounded from above by the length of songs_list.
-									let dir = aplock.songs_list.get(row).unwrap();
-									if render_song_entry_ui_element(ui, row, current_song_index_clone, dir, &mut activate_song) {
-										song_change_triggered = true;
-										activate_song = row;
+									let song = 
+										if !first_element_set {first_element_set = true; chn.nth(row)}
+										else {chn.next()};
+									
+									if row < directories_size {
+										if let Some(directory) = song {
+											(directory_activation, dirmove_name) = {
+												let tmp = render_directory_element(ui, false, directory);
+												if tmp == DirActivate::Inactive {(directory_activation, dirmove_name)} else {(tmp, directory.clone())}
+											};
+										}
+									} else {
+										if let Some(song) = song {
+											if render_song_entry_ui_element(ui, row - directories_size, current_song_index_clone, song, &mut activate_song) {
+												song_change_triggered = true;
+												activate_song = row - directories_size;
+											}
+										}
 									}
 								}
 							}
@@ -421,9 +445,23 @@ impl eframe::App for App {
 							self.error = play_song(&mut self.appdata, res.0, &res.1);
 						} else {
 							let appdata = self.appdata.lock().unwrap();
-							if appdata.songs_list.len() == 0 {
+							if appdata.songs_list.len() == 0 && self.dirlist.len() == 0 {
 								ui.label("Error: No songs in active folder");
 							}
+						}
+
+						match directory_activation {
+							DirActivate::Inactive => (),
+							DirActivate::Add => (),
+							DirActivate::Enter => {
+								let songfol = &self.appdata.lock().unwrap().song_folder;
+								self.displayonly_song_folder = if songfol.ends_with('/') || songfol.ends_with('\\') || songfol.len() == 0 {
+									format!("{}{}", songfol, dirmove_name)
+								} else {
+									format!("{}/{}", songfol, dirmove_name)
+								};
+								self.force_refresh = true;
+							},
 						}
 					});
 				});
@@ -912,6 +950,7 @@ fn handle_song_end(sel_type: SelectionType, app: &mut Arc<Mutex<SharedAppData>>)
 	};
 }
 
+#[derive(PartialEq)]
 enum DirActivate {
 	// Default - Nothing happens.
 	Inactive,
@@ -928,15 +967,19 @@ fn render_directory_element(ui: &mut egui::Ui, dir_active: bool, text: &str) -> 
 		if dir_active {
 			ui.set_max_width(245.0);
 			ui.style_mut().wrap_mode = Some(TextWrapMode::Truncate);
-			ui.label(RichText::new(text).underline().strong());
+			ui.label(RichText::new(text).underline()).on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_ui(|ui| {ui.label(RichText::new(text).underline().strong());});
 		}
 		else {
 			ui.style_mut().wrap_mode = Some(TextWrapMode::Truncate);
 			ui.set_max_width(245.0);
-			ui.label(RichText::new(text).underline());
+			ui.scope(|ui| {
+				ui.style_mut().visuals.hyperlink_color = Color32::WHITE;
+				if ui.add(egui::Link::new(text)).clicked() {
+					dir_activation = DirActivate::Enter;
+				}
+			});
 		}
-		if ui.button("+").clicked() {
-			
+		if ui.button(RichText::new("+").strong().size(16.0)).clicked() {
 			dir_activation = DirActivate::Add;
 		}
 	});
@@ -990,5 +1033,77 @@ fn file_path_build(folder_paths: &str, file_name: &str) -> String {
 		return format!("{}{}", folder_paths, file_name);
 	} else {
 		return format!("{}/{}", folder_paths, file_name);
+	}
+}
+
+fn refresh_logic(app: &mut App) {
+	// Not resetting this could break things in a billion tiny edge cases and I am NOT handling that.
+	app.search_text = format!("");
+					
+	let mut appdata = app.appdata.lock().unwrap();
+	appdata.song_folder = app.displayonly_song_folder.clone();
+	
+	appdata.current_song_info.nodisplay_time_listened += appdata.start_system.elapsed().unwrap().as_millis();
+	appdata.start_system = SystemTime::now();
+	let sindex = appdata.cur_song_index;
+	save_data_noinsert(&mut appdata, sindex);
+	
+	// This is incredibly weird but I had to do it this way to satisfy the borrow checker.
+	let old_file_name = appdata.songs_list.get(appdata.cur_song_index);
+	let (ofn, ofn_exists) = if let Some(old_file_name) = old_file_name {
+		((*old_file_name).clone(), true)
+	} else {
+		(String::new(), false)
+	};
+	appdata.songs_list.clear();
+	app.dirlist.clear();
+
+	let paths = if appdata.song_folder.len() == 0 {
+		// For some reason it doesn't read the current directory when given an empty string. Strange imo but whatever
+		std::fs::read_dir("./")
+	} else {
+		std::fs::read_dir(&appdata.song_folder)
+	};
+	
+	if let Ok(paths) = paths {
+		for p in paths {
+			if let Ok(a) = p {
+				
+				if a.file_type().unwrap().is_dir() {
+					// If the file names contain invalid unicode data it's best to just ignore them
+					if let Ok (fname) = a.file_name().into_string() {
+						app.dirlist.push(fname);
+					}
+					continue;
+				}
+				
+				let song_result = a.file_name().into_string();
+				if let Ok(song_result) = song_result {
+					if song_result.ends_with(".mp3") {
+						appdata.songs_list.push(song_result);
+					}
+				}
+			}
+		}
+	}
+	// Rare windows W
+	// Windows returns the files sorted alphabetically. But this is platform dependent behavior
+	// To keep songs in order on non-windows platforms we run a sort() call.
+	if !cfg!(windows) {
+		appdata.songs_list.sort();
+	}
+	if ofn_exists {
+		let new_index = appdata.songs_list.binary_search(&ofn);
+		if let Ok(new_index) = new_index {
+			appdata.cur_song_index = new_index;
+		}
+	} else {
+		// This is only in the rare circumstance that the song playing has since been deleted before the refresh.
+		appdata.cur_song_index = 0;
+	}
+	let rslt = appdata.songs_list.get(appdata.cur_song_index).clone();
+	if let Some(song) = rslt {
+		let clone = song.clone();
+		update_cursong_data(&mut appdata, &clone);
 	}
 }
