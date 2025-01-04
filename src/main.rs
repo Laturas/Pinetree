@@ -259,8 +259,8 @@ impl eframe::App for App {
 						ui.selectable_value(&mut appdata.sel_type, SelectionType::Next, "Next");
 					}
 				);
-				ui.label("File path:").on_hover_text("Relative to the file path of the executable"); 
-				let lab = ui.add(egui::TextEdit::singleline(&mut self.displayonly_song_folder).hint_text("Song folder...")).on_hover_text("Relative to the file path of the executable");
+				ui.label("File path:").on_hover_text("The file path of the current open folder.\nRelative to the file path of the executable"); 
+				let lab = ui.add(egui::TextEdit::singleline(&mut self.displayonly_song_folder).hint_text("Song folder...")).on_hover_text("The file path of the current open folder.\nRelative to the file path of the executable");
 
 				if lab.lost_focus() && lab.ctx.input(|i| i.key_pressed(egui::Key::Enter)) {
 					self.force_refresh = true;
@@ -983,12 +983,12 @@ fn render_directory_element(ui: &mut egui::Ui, dir_active: bool, text: &str) -> 
 			ui.set_max_width(245.0);
 			ui.scope(|ui| {
 				ui.style_mut().visuals.hyperlink_color = Color32::from_rgb(180, 180, 255);
-				if ui.add(egui::Link::new(text)).clicked() {
+				if ui.add(egui::Link::new(text)).on_hover_text_at_pointer("Enter this folder").clicked() {
 					dir_activation = DirActivate::Enter;
 				}
 			});
 		}
-		if ui.button(RichText::new("+").strong().size(16.0)).clicked() {
+		if ui.button(RichText::new("+").strong().size(16.0)).on_hover_text("Add songs from this folder to the current list").clicked() {
 			dir_activation = DirActivate::Add;
 		}
 	});

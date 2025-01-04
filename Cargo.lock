@@ -916,7 +916,7 @@ checksum = "f25c0e292a7ca6d6498557ff1df68f32c99850012b6ea401cf8daf771f22ff53"
 
 [[package]]
 name = "dreamer"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "eframe",
  "egui",
