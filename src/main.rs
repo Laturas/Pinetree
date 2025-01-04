@@ -14,6 +14,7 @@
 **/
 
 use eframe::egui::Visuals;
+use filetree::*;
 use rodio::Source;
 use rand::Rng;
 use id3::TagLike;
@@ -21,17 +22,14 @@ use egui::{
 	Color32, RichText, TextWrapMode
 };
 use std::{
-	collections::HashMap,
-	path::Path,
-	fs::{File, OpenOptions},
-	sync::{Arc, Mutex},
-	time::{Duration, SystemTime},
-	io::{BufRead, BufReader, Write},
+	collections::HashMap, fs::{File, OpenOptions}, io::{BufRead, BufReader, Write}, path::Path, sync::{Arc, Mutex}, time::{Duration, SystemTime}
 };
 
 // This is a really stupid dependency but as it turns out I guess this is a non-trivial problem???
 // Rodio's built in functionality for this just doesn't work most of the time for some reason.
 use mp3_duration;
+
+mod filetree;
 
 fn main() -> Result<(), eframe::Error> {
 	let options = eframe::NativeOptions {
@@ -39,6 +37,13 @@ fn main() -> Result<(), eframe::Error> {
 		..Default::default()
 	};
 	let app = App::default();
+	{
+		let root_name_clone = {app.appdata.lock().unwrap().song_folder.clone()};
+
+		let mut appdata = app.appdata.lock().unwrap();
+
+		walk_tree(&mut appdata.prewalked, &root_name_clone, &app.filetree_hashmap);
+	}
 	let mut shared_data = app.appdata.clone();
 	std::thread::spawn(move || {
         loop {
@@ -107,6 +112,36 @@ struct SharedAppData {
 
 	_stream: rodio::OutputStream, // THIS HAS TO EXIST otherwise the lifetime causes the program to crash
 	sink: rodio::Sink,
+
+	prewalked: Vec<FileElement>,
+}
+struct App {
+	appdata: Arc<Mutex<SharedAppData>>,
+	
+	// Not accessed from other threads
+	search_text: String,
+	genre_filter: String,
+	artist_filter: String,
+	error: String,
+	volume: f32,
+	save_data_message: DataSaveError,
+	fonts_added: bool,
+	force_refresh: bool,
+
+	// There is a good reason I split this into two duplicate fields.
+	//
+	//	1. Updating the song list is a very expensive operation that I don't wanna do on every keystroke (would become VERY laggy, unavoidably).
+	//	2. Updating every keystroke anyways would be pointless because on most of the keystrokes no result would be returned until the typing was finished
+	//	3. I don't want song playing to break while the field is being typed in.
+	//
+	// So, this field stores what is shown in the text field,
+	// and the one in appdata is what's used for any I/O operations and is updated on a refresh call.
+	displayonly_song_folder: String,
+	dirlist: Vec::<String>,
+	searched_dirlist: Vec::<usize>,
+
+	// This was originally gonna be a tree but I needed a hashmap anyways and it ended up working out
+	filetree_hashmap: HashMap<String, FileTreeNode>,
 }
 
 impl Default for SharedAppData {
@@ -170,41 +205,19 @@ impl Default for SharedAppData {
 			current_song_info: new_si,
 			dat_map: data_map,
 			song_data_exists: data_found,
+
+			prewalked: Vec::new(),
 		}
 	}
 }
 
-struct App {
-	appdata: Arc<Mutex<SharedAppData>>,
-	
-	// Not accessed from other threads
-	search_text: String,
-	genre_filter: String,
-	artist_filter: String,
-	error: String,
-	volume: f32,
-	save_data_message: DataSaveError,
-	fonts_added: bool,
-	force_refresh: bool,
-
-	// There is a good reason I split this into two duplicate fields.
-	//
-	//	1. Updating the song list is a very expensive operation that I don't wanna do on every keystroke (would become VERY laggy, unavoidably).
-	//	2. Updating every keystroke anyways would be pointless because on most of the keystrokes no result would be returned until the typing was finished
-	//	3. I don't want song playing to break while the field is being typed in.
-	//
-	// So, this field stores what is shown in the text field,
-	// and the one in appdata is what's used for any I/O operations and is updated on a refresh call.
-	displayonly_song_folder: String,
-	dirlist: Vec::<String>,
-	searched_dirlist: Vec::<usize>,
-}
 
 impl Default for App {
 	fn default() -> Self {
+		let default_directory = "songs/";
 		let ad = Arc::new(Mutex::new(SharedAppData::default()));
 		let mut dirconstructor: Vec<String> = vec![];
-		let paths = std::fs::read_dir("songs/");
+		let paths = std::fs::read_dir(&default_directory);
 		if let Ok(paths) = paths {
 			for p in paths {
 				if let Ok(p) = p {
@@ -213,11 +226,13 @@ impl Default for App {
 						if let Ok (fname) = p.file_name().into_string() {
 							dirconstructor.push(fname);
 						}
-						continue;
 					}
 				}
 			}
 		}
+		let rootnode = FileTreeNode::new(default_directory.to_owned());
+		let mut ftree_hmap: HashMap<String, FileTreeNode> = HashMap::new();
+		ftree_hmap.insert(default_directory.to_owned(), rootnode);
 		Self {
 			appdata: ad,
 			search_text: format!(""),
@@ -232,6 +247,7 @@ impl Default for App {
 			force_refresh: false,
 
 			displayonly_song_folder: format!("songs/"),
+			filetree_hashmap: ftree_hmap,
 		}
 	}
 }
