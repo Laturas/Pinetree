@@ -394,7 +394,6 @@ impl eframe::App for App {
 									let mut appdata = self.appdata.lock().unwrap();
 									(update_cursong_data(&mut appdata, &item), item)
 								};
-								println!("\n\n{}", &fp);
 								let file = File::open(&fp).unwrap(); // HANDLE THIS at some point. This unwrap actually can fail.
 								
 								let mut appdata = self.appdata.lock().unwrap();
@@ -429,16 +428,7 @@ impl eframe::App for App {
 							},
 							DirActivate::Enter => {
 								let songfol = &self.appdata.lock().unwrap().song_folder;
-								self.displayonly_song_folder = if songfol.ends_with('/') || songfol.ends_with('\\') || songfol.len() == 0 {
-									format!("{}{}", songfol, dirmove_name)
-								} else {
-									format!("{}/{}", songfol, dirmove_name)
-								};
-								self.displayonly_song_folder = if songfol.ends_with('/') || songfol.ends_with('\\') || songfol.len() == 0 {
-									format!("{}{}", songfol, dirmove_name)
-								} else {
-									format!("{}/{}", songfol, dirmove_name)
-								};
+								self.displayonly_song_folder = dirmove_name;
 								self.force_refresh = true;
 							},
 						}
@@ -747,10 +737,11 @@ fn save_data_noinsert(app: &mut SharedAppData, cur_song_index: usize) {
 	let dat_map = &mut app.dat_map;
 	let songs_list = &app.prewalked;
 	if let Some(current_s) = songs_list.get(cur_song_index) {
-		let data = format!("{},{},{},{},{}", current_s.file_name, current_song_info.name, current_song_info.artist, current_song_info.genre, current_song_info.nodisplay_time_listened);
+		let sname = reduce_song_name(&current_s.file_name);
+		let data = format!("{},{},{},{},{}", sname, current_song_info.name, current_song_info.artist, current_song_info.genre, current_song_info.nodisplay_time_listened);
 		
-		if dat_map.contains_key(&current_s.file_name) {
-			dat_map.insert(current_s.file_name.clone(), data);
+		if dat_map.contains_key(&sname) {
+			dat_map.insert(sname, data);
 		} else {
 			return;
 		}
@@ -782,9 +773,10 @@ fn save_data(app: &mut SharedAppData, cur_song_index: usize) -> DataSaveError {
 		{
 			return DataSaveError::IllegalChar;
 		}
-		let data = format!("{},{},{},{},{}", &current_s.file_name, current_song_info.name, current_song_info.artist, current_song_info.genre, current_song_info.nodisplay_time_listened);
+		let sname = reduce_song_name(&current_s.file_name);
+		let data = format!("{},{},{},{},{}", sname, current_song_info.name, current_song_info.artist, current_song_info.genre, current_song_info.nodisplay_time_listened);
 		
-		dat_map.insert(current_s.file_name.clone(), data);
+		dat_map.insert(sname, data);
 		let write_result = std::fs::write("data.csv", "");
 
 		if let Err(_) = write_result {
@@ -828,7 +820,7 @@ fn initialize_data_map(data_map: &mut HashMap<String,String>) {
 }
 
 fn update_cursong_data(appdata: &mut SharedAppData, song_name: &str) -> bool {
-	let map_data = appdata.dat_map.get(song_name);
+	let map_data = appdata.dat_map.get(&reduce_song_name(song_name));
 
 	if let Some(map_data) = map_data {
 		let collection = map_data.split(',').collect::<Vec<&str>>();
@@ -1011,7 +1003,10 @@ fn refresh_logic(app: &mut App) {
 	app.search_text = format!("");
 					
 	let mut appdata = app.appdata.lock().unwrap();
-	appdata.song_folder = if app.displayonly_song_folder.ends_with('/') || app.displayonly_song_folder.ends_with('\\') {
+	appdata.song_folder = if app.displayonly_song_folder.len() == 0 {
+		"./".to_owned()
+	}
+	else if app.displayonly_song_folder.ends_with('/') || app.displayonly_song_folder.ends_with('\\') {
 		app.displayonly_song_folder.clone()
 	} else {
 		format!("{}/", app.displayonly_song_folder)
@@ -1034,6 +1029,7 @@ fn refresh_logic(app: &mut App) {
 	if !app.filetree_hashmap.contains_key(&root_name) {
 		app.filetree_hashmap.insert(root_name.clone(), FileTreeNode::new(root_name.clone()));
 	}
+
 	walk_tree(&mut appdata.prewalked, &root_name, &app.filetree_hashmap);
 
 	if ofn_exists {

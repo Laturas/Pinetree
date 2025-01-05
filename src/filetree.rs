@@ -82,6 +82,7 @@ use std::collections::HashMap;
 /// Deletes any previous information stored in out_vec
 pub fn walk_tree(out_vec: &mut Vec<FileElement>, root_name: &str, hashmap: &HashMap<String, FileTreeNode>) {
     out_vec.clear();
+    let root_name = if root_name.len() == 0 {"./"} else {root_name};
     let result = hashmap.get(root_name);
     if let Some(root_node) = result {
 
