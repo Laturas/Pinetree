@@ -100,7 +100,7 @@ struct SharedAppData {
 	search_results: Vec<usize>,
 	sel_type: SelectionType,
 	cur_song_index: usize,
-	songs_list: Vec<String>,
+	//songs_list: Vec<String>,
 	start_system: SystemTime,
 	song_folder: String,
 	start_milis: u64,
@@ -196,7 +196,7 @@ impl Default for SharedAppData {
 			sink: rodio::Sink::try_new(&i2).unwrap(),
 			sel_type: SelectionType::None,
 			cur_song_index: 0,
-			songs_list: songls,
+			//songs_list: songls,
 			start_system: SystemTime::now(),
 			song_folder: format!("songs/"),
 			total_duration: 0,
@@ -337,28 +337,20 @@ impl eframe::App for App {
 					} else {
 						if dont_search {
 							let aplock = self.appdata.lock().unwrap();
-							aplock.songs_list.len() + self.dirlist.len()
+							aplock.prewalked.len()
 						} else {
 							let mut aplock = self.appdata.lock().unwrap();
 							let mut new_search_results: Vec<usize> = Vec::new();
-							let mut new_dir_search_results: Vec<usize> = Vec::new();
 							aplock.search_results.clear();
-							self.searched_dirlist.clear();
-							for (index, dir) in (&aplock.songs_list).into_iter().enumerate() {
-								if (dir.to_lowercase()).contains(&self.search_text.to_lowercase()) {
+							for (index, dir) in (&aplock.prewalked).into_iter().enumerate() {
+								if ((&dir.file_name).to_lowercase()).contains(&self.search_text.to_lowercase()) {
 									new_search_results.push(index);
-								}
-							}
-							for (index, dir) in (&self.dirlist).into_iter().enumerate() {
-								if (dir.to_lowercase()).contains(&self.search_text.to_lowercase()) {
-									new_dir_search_results.push(index);
 								}
 							}
 							use_search_results = true;
 							aplock.search_text_results = self.search_text.clone();
 							aplock.search_results = new_search_results;
-							self.searched_dirlist = new_dir_search_results;
-							aplock.search_results.len() + self.searched_dirlist.len()
+							aplock.search_results.len()
 						}
 					};
 					egui::ScrollArea::vertical().show_rows(ui, 16.0, total,|ui, row_range| {
@@ -372,59 +364,30 @@ impl eframe::App for App {
 							let aplock = self.appdata.lock().unwrap();
 							let current_song_index_clone = aplock.cur_song_index;
 
-							if use_search_results {
-								let directories_size = self.searched_dirlist.len();
-								let mut chn = self.searched_dirlist.iter().chain(aplock.search_results.iter());
-								let mut first_element_set = false;
-
-								for row in row_range {
-									let song = 
-										if !first_element_set {first_element_set = true; chn.nth(row)}
-										else {chn.next()};
-									
-									if row < directories_size {
-										if let Some(directory_index) = song {
-											let dirname = self.dirlist.get(*directory_index).unwrap();
-											(directory_activation, dirmove_name) = {
-												let tmp = render_directory_element(ui, false, dirname);
-												if tmp == DirActivate::Inactive {(directory_activation, dirmove_name)} else {(tmp, dirname.clone())}
-											};
-										}
+							for row in row_range {
+								let (element_index, file) = {
+									if use_search_results {
+										let pw_index = aplock.search_results.get(row).unwrap();
+										let file = aplock.prewalked.get(*pw_index).unwrap();
+										(*pw_index, file)
 									} else {
-										if let Some(song_index) = song {
-											let songname = aplock.songs_list.get(*song_index).unwrap();
-											if render_song_entry_ui_element(ui, *song_index, current_song_index_clone, songname, &mut activate_song) {
-												song_change_triggered = true;
-												activate_song = *song_index;
-											}
-										}
+										let file = aplock.prewalked.get(row).unwrap();
+										(row, file)
 									}
-								}
-							} else {
-								let directories_size = self.dirlist.len();
-								let mut chn = self.dirlist.iter().chain(aplock.songs_list.iter());
-								let mut first_element_set = false;
-
-								for row in row_range {
-									let song = 
-										if !first_element_set {first_element_set = true; chn.nth(row)}
-										else {chn.next()};
-									
-									if row < directories_size {
-										if let Some(directory) = song {
-											(directory_activation, dirmove_name) = {
-												let tmp = render_directory_element(ui, false, directory);
-												if tmp == DirActivate::Inactive {(directory_activation, dirmove_name)} else {(tmp, directory.clone())}
-											};
+								};
+								match file.file_type {
+									FileType::Directory => {
+										(directory_activation, dirmove_name) = {
+											let tmp = render_directory_element(ui, false, &file.file_name);
+											if tmp == DirActivate::Inactive {(directory_activation, dirmove_name)} else {(tmp, file.file_name.clone())}
+										};
+									},
+									FileType::AudioFile => {
+										if render_song_entry_ui_element(ui, element_index, current_song_index_clone, &file.file_name, &mut activate_song) {
+											song_change_triggered = true;
+											activate_song = element_index;
 										}
-									} else {
-										if let Some(song) = song {
-											if render_song_entry_ui_element(ui, row - directories_size, current_song_index_clone, song, &mut activate_song) {
-												song_change_triggered = true;
-												activate_song = row - directories_size;
-											}
-										}
-									}
+									},
 								}
 							}
 							current_song_index_clone
@@ -432,10 +395,9 @@ impl eframe::App for App {
 						// BUG: Currently the program assumes the previous song is in the same folder which unfortunate transfers song listen duration incorrectly.
 						if song_change_triggered {
 							let res = {
-	
 								// I will just assume this unwrap will never fail.
 								// I cannot comprehend a scenario in which this would be triggered and also be OOB.
-								let mut item = self.appdata.lock().unwrap().songs_list.get(activate_song).unwrap().clone();
+								let mut item = self.appdata.lock().unwrap().prewalked.get(activate_song).unwrap().file_name.clone();
 								{
 									let mut appdata = self.appdata.lock().unwrap();
 
@@ -448,9 +410,9 @@ impl eframe::App for App {
 								
 								let (data_exists, fp)  = {
 									let mut appdata = self.appdata.lock().unwrap();
-									(update_cursong_data(&mut appdata, &mut item), file_path_build(&appdata.song_folder,&item))
+									(update_cursong_data(&mut appdata, &mut item), item)
 								};
-								
+								println!("{}", fp);
 								let file = File::open(&fp).unwrap(); // HANDLE THIS at some point. This unwrap actually can fail.
 								
 								let mut appdata = self.appdata.lock().unwrap();
@@ -466,7 +428,7 @@ impl eframe::App for App {
 							self.error = play_song(&mut self.appdata, res.0, &res.1);
 						} else {
 							let appdata = self.appdata.lock().unwrap();
-							if appdata.songs_list.len() == 0 && self.dirlist.len() == 0 {
+							if appdata.prewalked.len() == 0 {
 								ui.label("Error: No songs in active folder");
 							}
 						}
@@ -544,10 +506,9 @@ impl eframe::App for App {
 						ui.set_max_width(250.0);
 						ui.set_min_width(250.0);
 						//ui.style_mut().wrap_mode = Some(TextWrapMode::Truncate);
-						let item = appdata.songs_list.get(appdata.cur_song_index);
+						let item = appdata.prewalked.get(appdata.cur_song_index);
 						let tag = if let Some(item) = item {
-							let fp = file_path_build(&appdata.song_folder,&item);
-							Some(id3::Tag::read_from_path(&fp))
+							Some(id3::Tag::read_from_path(&item.file_name))
 						} else {None};
 						
 						ui.set_min_height(25.0);
@@ -581,9 +542,9 @@ impl eframe::App for App {
 				let appdata = self.appdata.lock().unwrap();
 				
 				// If you know of a way of combining these let me know, cuz I don't know a better way.
-				if let Some(song_name) = appdata.songs_list.get(appdata.cur_song_index as usize)  {
+				if let Some(song) = appdata.prewalked.get(appdata.cur_song_index as usize)  {
 					if !appdata.sink.empty() {
-						ui.label(format!("Currently Playing: {}", song_name));
+						ui.label(format!("Currently Playing: {}", song.file_name));
 					} else {
 						ui.label(format!("No song currently playing"));
 					}
@@ -601,7 +562,7 @@ impl eframe::App for App {
 					let song_exists= {
 						let a_lock = self.appdata.lock().unwrap();
 						let s_ind = a_lock.cur_song_index;
-						let tempsong = a_lock.songs_list.get(s_ind).clone();
+						let tempsong = a_lock.prewalked.get(s_ind).clone();
 						tempsong.is_some()
 					};
 					if song_exists {
@@ -609,7 +570,7 @@ impl eframe::App for App {
 							let a_lock = self.appdata.lock().unwrap();
 
 							// I similarly cannot comprehend a scenario where this unwrap fails. Cosmic bit flip or something maybe.
-							file_path_build(&a_lock.song_folder,&a_lock.songs_list.get(a_lock.cur_song_index).unwrap())
+							a_lock.prewalked.get(a_lock.cur_song_index).unwrap().file_name.clone()
 						};
 						let open_file = File::open(&fp);
 	
@@ -636,7 +597,7 @@ impl eframe::App for App {
 							appdatalock.sink.pause();
 							appdatalock.current_song_info.nodisplay_time_listened += appdatalock.start_system.elapsed().unwrap().as_millis();
 							let sindex = appdatalock.cur_song_index;
-							if appdatalock.songs_list.len() != 0 {
+							if appdatalock.prewalked.len() != 0 {
 								save_data_noinsert(&mut appdatalock, sindex);
 							}
 							appdatalock.start_milis = appdatalock.position;
@@ -788,12 +749,12 @@ fn play_song(appdata: &mut Arc<Mutex<SharedAppData>>, reader: BufReader<File>, f
 fn save_data_noinsert(app: &mut SharedAppData, cur_song_index: usize) {
 	let current_song_info = &app.current_song_info;
 	let dat_map = &mut app.dat_map;
-	let songs_list = &app.songs_list;
+	let songs_list = &app.prewalked;
 	if let Some(current_s) = songs_list.get(cur_song_index) {
-		let data = format!("{},{},{},{},{}", current_s, current_song_info.name, current_song_info.artist, current_song_info.genre, current_song_info.nodisplay_time_listened);
+		let data = format!("{},{},{},{},{}", current_s.file_name, current_song_info.name, current_song_info.artist, current_song_info.genre, current_song_info.nodisplay_time_listened);
 		
-		if dat_map.contains_key(current_s) {
-			dat_map.insert(current_s.clone(), data);
+		if dat_map.contains_key(&current_s.file_name) {
+			dat_map.insert(current_s.file_name.clone(), data);
 		} else {
 			return;
 		}
@@ -812,12 +773,12 @@ fn save_data_noinsert(app: &mut SharedAppData, cur_song_index: usize) {
 }
 
 fn save_data(app: &mut SharedAppData, cur_song_index: usize) -> DataSaveError {
-	if app.songs_list.len() == 0 {
+	if app.prewalked.len() == 0 {
 		return DataSaveError::NoSongToSave;
 	}
 	let current_song_info = &app.current_song_info;
 	let dat_map = &mut app.dat_map;
-	let songs_list = &app.songs_list;
+	let songs_list = &app.prewalked;
 	if let Some(current_s) = songs_list.get(cur_song_index) {
 		if current_song_info.name.contains(',') ||
 			current_song_info.artist.contains(',') ||
@@ -825,9 +786,9 @@ fn save_data(app: &mut SharedAppData, cur_song_index: usize) -> DataSaveError {
 		{
 			return DataSaveError::IllegalChar;
 		}
-		let data = format!("{},{},{},{},{}", current_s, current_song_info.name, current_song_info.artist, current_song_info.genre, current_song_info.nodisplay_time_listened);
+		let data = format!("{},{},{},{},{}", &current_s.file_name, current_song_info.name, current_song_info.artist, current_song_info.genre, current_song_info.nodisplay_time_listened);
 		
-		dat_map.insert(current_s.clone(), data);
+		dat_map.insert(current_s.file_name.clone(), data);
 		let write_result = std::fs::write("data.csv", "");
 
 		if let Err(_) = write_result {
@@ -891,7 +852,8 @@ fn update_cursong_data(appdata: &mut SharedAppData, song_name: &str) -> bool {
 /// Returns error text to be displayed
 fn handle_song_end(sel_type: SelectionType, app: &mut Arc<Mutex<SharedAppData>>) -> String {
 	{
-		if sel_type != SelectionType::None && app.lock().unwrap().songs_list.len() == 0 {
+		// TODO
+		if sel_type != SelectionType::None && app.lock().unwrap().prewalked.len() == 0 {
 			return format!("Error: No songs in current directory");
 		}
 	}
@@ -900,8 +862,8 @@ fn handle_song_end(sel_type: SelectionType, app: &mut Arc<Mutex<SharedAppData>>)
 			SelectionType::Loop => {
 			let fp = {
 				let appdata = app.lock().unwrap();
-				if let Some(s) = appdata.songs_list.get(appdata.cur_song_index) {
-					file_path_build(&appdata.song_folder,&s)
+				if let Some(s) = appdata.prewalked.get(appdata.cur_song_index) {
+					s.file_name.clone()
 				} else {
 					return format!("How did you even cause this error??");
 				}
@@ -934,12 +896,11 @@ fn handle_song_end(sel_type: SelectionType, app: &mut Arc<Mutex<SharedAppData>>)
 				let sindex = appdata.cur_song_index;
 				save_data_noinsert(&mut appdata, sindex);
 				
-				appdata.cur_song_index = if appdata.cur_song_index + 1 >= appdata.songs_list.len() {0} else {appdata.cur_song_index + 1};
+				appdata.cur_song_index = if appdata.cur_song_index + 1 >= appdata.prewalked.len() {0} else {appdata.cur_song_index + 1};
 				
-				let mut item = appdata.songs_list.get(appdata.cur_song_index).unwrap().clone();
-				let fp = file_path_build(&appdata.song_folder,&item);
+				let mut item = appdata.prewalked.get(appdata.cur_song_index).unwrap().file_name.clone();
 				appdata.song_data_exists = update_cursong_data(&mut appdata, &mut item);
-				fp
+				item
 			};
 			let file = File::open(&fp);
 			if let Ok(file) = file {
@@ -957,13 +918,12 @@ fn handle_song_end(sel_type: SelectionType, app: &mut Arc<Mutex<SharedAppData>>)
 				let sindex = appdata.cur_song_index;
 				save_data_noinsert(&mut appdata, sindex);
 				
-				appdata.cur_song_index = rand::thread_rng().gen_range(0..appdata.songs_list.len());
+				appdata.cur_song_index = rand::thread_rng().gen_range(0..appdata.prewalked.len());
 				
 				// I won't even bother handling this bruh like come on.
-				let mut item = appdata.songs_list.get(appdata.cur_song_index).unwrap().clone();
-				let fp = file_path_build(&appdata.song_folder,&item);
+				let mut item = appdata.prewalked.get(appdata.cur_song_index).unwrap().file_name.clone();
 				appdata.song_data_exists = update_cursong_data(&mut appdata, &mut item);
-				fp
+				item
 			};
 			let file = File::open(&fp);
 			if let Ok(file) = file {
@@ -1053,20 +1013,17 @@ fn add_font(ctx: &egui::Context) {
         .push("fallback".to_owned());
     ctx.set_fonts(fonts);
 }
-fn file_path_build(folder_paths: &str, file_name: &str) -> String {
-	if folder_paths.ends_with('/') || folder_paths.ends_with('\\') {
-		return format!("{}{}", folder_paths, file_name);
-	} else {
-		return format!("{}/{}", folder_paths, file_name);
-	}
-}
 
 fn refresh_logic(app: &mut App) {
 	// Not resetting this could break things in a billion tiny edge cases and I am NOT handling that.
 	app.search_text = format!("");
 					
 	let mut appdata = app.appdata.lock().unwrap();
-	appdata.song_folder = app.displayonly_song_folder.clone();
+	appdata.song_folder = if app.displayonly_song_folder.ends_with('/') || app.displayonly_song_folder.ends_with('\\') {
+		app.displayonly_song_folder.clone()
+	} else {
+		format!("{}/", app.displayonly_song_folder)
+	};
 	
 	appdata.current_song_info.nodisplay_time_listened += appdata.start_system.elapsed().unwrap().as_millis();
 	appdata.start_system = SystemTime::now();
@@ -1074,62 +1031,27 @@ fn refresh_logic(app: &mut App) {
 	save_data_noinsert(&mut appdata, sindex);
 	
 	// This is incredibly weird but I had to do it this way to satisfy the borrow checker.
-	let old_file_name = appdata.songs_list.get(appdata.cur_song_index);
+	let old_file_name = appdata.prewalked.get(appdata.cur_song_index);
 	let (ofn, ofn_exists) = if let Some(old_file_name) = old_file_name {
-		((*old_file_name).clone(), true)
+		((*old_file_name).file_name.clone(), true)
 	} else {
 		(String::new(), false)
 	};
-	appdata.songs_list.clear();
-	app.dirlist.clear();
+	let root_name = appdata.song_folder.clone();
+	walk_tree(&mut appdata.prewalked, &root_name, &app.filetree_hashmap);
 
-	let paths = if appdata.song_folder.len() == 0 {
-		// For some reason it doesn't read the current directory when given an empty string. Strange imo but whatever
-		std::fs::read_dir("./")
-	} else {
-		std::fs::read_dir(&appdata.song_folder)
-	};
-	
-	if let Ok(paths) = paths {
-		for p in paths {
-			if let Ok(a) = p {
-				
-				// I tried to figure out where this .file_type() method could possibly fail, but I have no idea. Maybe platform dependence?
-				if a.file_type().unwrap().is_dir() {
-					// If the file names contain invalid unicode data it's best to just ignore them
-					if let Ok (fname) = a.file_name().into_string() {
-						app.dirlist.push(fname);
-					}
-					continue;
-				}
-				
-				let song_result = a.file_name().into_string();
-				if let Ok(song_result) = song_result {
-					if song_result.ends_with(".mp3") {
-						appdata.songs_list.push(song_result);
-					}
-				}
-			}
-		}
-	}
-	// Rare windows W
-	// Windows returns the files sorted alphabetically. But this is platform dependent behavior
-	// To keep songs in order on non-windows platforms we run a sort() call.
-	if !cfg!(windows) {
-		appdata.songs_list.sort();
-	}
 	if ofn_exists {
-		let new_index = appdata.songs_list.binary_search(&ofn);
-		if let Ok(new_index) = new_index {
-			appdata.cur_song_index = new_index;
+		let new_pos = appdata.prewalked.iter().enumerate().find(|s| {s.1.file_type == FileType::AudioFile && s.1.file_name == ofn});
+		if let Some(new_index) = new_pos {
+			appdata.cur_song_index = new_index.0;
 		}
 	} else {
 		// This is only in the rare circumstance that the song playing has since been deleted before the refresh.
 		appdata.cur_song_index = 0;
 	}
-	let rslt = appdata.songs_list.get(appdata.cur_song_index).clone();
+	let rslt = appdata.prewalked.get(appdata.cur_song_index);
 	if let Some(song) = rslt {
-		let clone = song.clone();
+		let clone = song.file_name.clone();
 		update_cursong_data(&mut appdata, &clone);
 	}
 }
