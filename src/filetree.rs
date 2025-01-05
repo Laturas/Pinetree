@@ -46,14 +46,14 @@ impl FileTreeNode {
                     if a.file_type().unwrap().is_dir() {
                         // If the file names contain invalid unicode data it's best to just ignore them
                         if let Ok (fname) = a.file_name().into_string() {
-                            subfolder_list.push(fname);
+                            subfolder_list.push(file_path_build(&directory_file_path, &fname));
                         }
                     }
                     else {
                         let song_result = a.file_name().into_string();
                         if let Ok(song_result) = song_result {
                             if song_result.ends_with(".mp3") {
-                                songs_list.push(song_result);
+                                songs_list.push(file_path_build(&directory_file_path, &song_result));
                             }
                         }
                     }
@@ -84,32 +84,33 @@ pub fn walk_tree(out_vec: &mut Vec<FileElement>, root_name: &str, hashmap: &Hash
     out_vec.clear();
     let result = hashmap.get(root_name);
     if let Some(root_node) = result {
-        out_vec.push(FileElement::new(FileType::Directory, root_name.to_owned()));
 
         for dir in &root_node.subfolders {
             out_vec.push(FileElement::new(FileType::Directory, dir.to_owned()));
             if hashmap.contains_key(dir) {
-                walk_tree_recursive(out_vec, &file_path_build(&root_name, &dir), &hashmap);
+                walk_tree_recursive(out_vec, &dir, &hashmap);
             }
         }
         for song in &root_node.songs {
-            out_vec.push(FileElement::new(FileType::AudioFile, file_path_build(root_name, &song)));
+            out_vec.push(FileElement::new(FileType::AudioFile, song.to_owned()));
         }
     }
 }
 
 fn walk_tree_recursive(out_vec: &mut Vec<FileElement>, root_name: &str, hashmap: &HashMap<String, FileTreeNode>) {
     let result = hashmap.get(root_name);
+    
     if let Some(root_node) = result {
 
         for dir in &root_node.subfolders {
             out_vec.push(FileElement::new(FileType::Directory, dir.to_owned()));
-            if hashmap.contains_key(dir) {
-                walk_tree_recursive(out_vec, &file_path_build(&root_name, &dir), &hashmap);
+            let fullpath = file_path_build(&root_name, &dir);
+            if hashmap.contains_key(&fullpath) {
+                walk_tree_recursive(out_vec, &fullpath, &hashmap);
             }
         }
         for song in &root_node.songs {
-            out_vec.push(FileElement::new(FileType::AudioFile, file_path_build(root_name, &song)));
+            out_vec.push(FileElement::new(FileType::AudioFile, song.to_owned()));
         }
     }
 }

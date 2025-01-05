@@ -137,8 +137,6 @@ struct App {
 	// So, this field stores what is shown in the text field,
 	// and the one in appdata is what's used for any I/O operations and is updated on a refresh call.
 	displayonly_song_folder: String,
-	dirlist: Vec::<String>,
-	searched_dirlist: Vec::<usize>,
 
 	// This was originally gonna be a tree but I needed a hashmap anyways and it ended up working out
 	filetree_hashmap: HashMap<String, FileTreeNode>,
@@ -216,20 +214,6 @@ impl Default for App {
 	fn default() -> Self {
 		let default_directory = "songs/";
 		let ad = Arc::new(Mutex::new(SharedAppData::default()));
-		let mut dirconstructor: Vec<String> = vec![];
-		let paths = std::fs::read_dir(&default_directory);
-		if let Ok(paths) = paths {
-			for p in paths {
-				if let Ok(p) = p {
-					if p.file_type().unwrap().is_dir() {
-						// If the file names contain invalid unicode data it's best to just ignore them
-						if let Ok (fname) = p.file_name().into_string() {
-							dirconstructor.push(fname);
-						}
-					}
-				}
-			}
-		}
 		let rootnode = FileTreeNode::new(default_directory.to_owned());
 		let mut ftree_hmap: HashMap<String, FileTreeNode> = HashMap::new();
 		ftree_hmap.insert(default_directory.to_owned(), rootnode);
@@ -242,8 +226,6 @@ impl Default for App {
 			volume: 0.5,
 			save_data_message: DataSaveError::NoError,
 			fonts_added: false,
-			dirlist: dirconstructor,
-			searched_dirlist: Vec::new(),
 			force_refresh: false,
 
 			displayonly_song_folder: format!("songs/"),
@@ -333,7 +315,7 @@ impl eframe::App for App {
 
 					let total = 
 					if use_search_results {
-						self.appdata.lock().unwrap().search_results.len() + self.searched_dirlist.len()
+						self.appdata.lock().unwrap().search_results.len()
 					} else {
 						if dont_search {
 							let aplock = self.appdata.lock().unwrap();
@@ -378,7 +360,7 @@ impl eframe::App for App {
 								match file.file_type {
 									FileType::Directory => {
 										(directory_activation, dirmove_name) = {
-											let tmp = render_directory_element(ui, false, &file.file_name);
+											let tmp = render_directory_element(ui, self.filetree_hashmap.contains_key(&file.file_name), &file.file_name);
 											if tmp == DirActivate::Inactive {(directory_activation, dirmove_name)} else {(tmp, file.file_name.clone())}
 										};
 									},
@@ -397,7 +379,7 @@ impl eframe::App for App {
 							let res = {
 								// I will just assume this unwrap will never fail.
 								// I cannot comprehend a scenario in which this would be triggered and also be OOB.
-								let mut item = self.appdata.lock().unwrap().prewalked.get(activate_song).unwrap().file_name.clone();
+								let item = self.appdata.lock().unwrap().prewalked.get(activate_song).unwrap().file_name.clone();
 								{
 									let mut appdata = self.appdata.lock().unwrap();
 
@@ -410,9 +392,9 @@ impl eframe::App for App {
 								
 								let (data_exists, fp)  = {
 									let mut appdata = self.appdata.lock().unwrap();
-									(update_cursong_data(&mut appdata, &mut item), item)
+									(update_cursong_data(&mut appdata, &item), item)
 								};
-								println!("{}", fp);
+								println!("\n\n{}", &fp);
 								let file = File::open(&fp).unwrap(); // HANDLE THIS at some point. This unwrap actually can fail.
 								
 								let mut appdata = self.appdata.lock().unwrap();
@@ -435,9 +417,23 @@ impl eframe::App for App {
 
 						match directory_activation {
 							DirActivate::Inactive => (),
-							DirActivate::Add => (),
+							DirActivate::Remove => {
+								self.filetree_hashmap.remove(&dirmove_name);
+	
+								self.force_refresh = true;
+							},
+							DirActivate::Add => {
+								self.filetree_hashmap.insert(dirmove_name.clone(), FileTreeNode::new(dirmove_name));
+
+								self.force_refresh = true;
+							},
 							DirActivate::Enter => {
 								let songfol = &self.appdata.lock().unwrap().song_folder;
+								self.displayonly_song_folder = if songfol.ends_with('/') || songfol.ends_with('\\') || songfol.len() == 0 {
+									format!("{}{}", songfol, dirmove_name)
+								} else {
+									format!("{}/{}", songfol, dirmove_name)
+								};
 								self.displayonly_song_folder = if songfol.ends_with('/') || songfol.ends_with('\\') || songfol.len() == 0 {
 									format!("{}{}", songfol, dirmove_name)
 								} else {
@@ -544,7 +540,7 @@ impl eframe::App for App {
 				// If you know of a way of combining these let me know, cuz I don't know a better way.
 				if let Some(song) = appdata.prewalked.get(appdata.cur_song_index as usize)  {
 					if !appdata.sink.empty() {
-						ui.label(format!("Currently Playing: {}", song.file_name));
+						ui.label(format!("Currently Playing: {}", reduce_song_name(&song.file_name)));
 					} else {
 						ui.label(format!("No song currently playing"));
 					}
@@ -942,6 +938,8 @@ enum DirActivate {
 	Inactive,
 	// Adds the songs of this folder to the current song list
 	Add,
+	// Removes the songs of this folder from the current song list
+	Remove,
 	// Enters this directory as the new current root directory
 	Enter,
 }
@@ -950,22 +948,16 @@ enum DirActivate {
 fn render_directory_element(ui: &mut egui::Ui, dir_active: bool, text: &str) -> DirActivate {
 	let mut dir_activation = DirActivate::Inactive;
 	ui.horizontal(|ui| {
-		if dir_active {
-			ui.set_max_width(245.0);
-			ui.style_mut().wrap_mode = Some(TextWrapMode::Truncate);
-		}
-		else {
 			ui.style_mut().wrap_mode = Some(TextWrapMode::Truncate);
 			ui.set_max_width(245.0);
 			ui.scope(|ui| {
 				ui.style_mut().visuals.hyperlink_color = Color32::from_rgb(180, 180, 255);
-				if ui.add(egui::Link::new(text)).on_hover_text_at_pointer("Enter this folder").clicked() {
+				if ui.add(egui::Link::new(reduce_song_name(text))).on_hover_text_at_pointer("Enter this folder").clicked() {
 					dir_activation = DirActivate::Enter;
 				}
 			});
-		}
-		if ui.button(RichText::new("+").strong().size(16.0)).on_hover_text("Add songs from this folder to the current list").clicked() {
-			dir_activation = DirActivate::Add;
+		if ui.button(RichText::new(if dir_active {"−"} else {"+"}).strong().size(16.0)).on_hover_text("Add songs from this folder to the current list").clicked() {
+			dir_activation = if dir_active {DirActivate::Remove} else {DirActivate::Add};
 		}
 	});
 	return dir_activation;
@@ -979,12 +971,12 @@ fn render_song_entry_ui_element(ui: &mut egui::Ui, index: usize, current_song_in
 		if current_song_index == index {
 			ui.set_max_width(245.0);
 			ui.style_mut().wrap_mode = Some(TextWrapMode::Truncate);
-			ui.label(RichText::new(dir).underline().strong());
+			ui.label(RichText::new(reduce_song_name(dir)).underline().strong());
 		}
 		else {
 			ui.style_mut().wrap_mode = Some(TextWrapMode::Truncate);
 			ui.set_max_width(245.0);
-			ui.label(dir);
+			ui.label(reduce_song_name(dir));
 		}
 		if ui.button("▶").clicked() {
 			
@@ -1038,6 +1030,10 @@ fn refresh_logic(app: &mut App) {
 		(String::new(), false)
 	};
 	let root_name = appdata.song_folder.clone();
+
+	if !app.filetree_hashmap.contains_key(&root_name) {
+		app.filetree_hashmap.insert(root_name.clone(), FileTreeNode::new(root_name.clone()));
+	}
 	walk_tree(&mut appdata.prewalked, &root_name, &app.filetree_hashmap);
 
 	if ofn_exists {
@@ -1053,5 +1049,28 @@ fn refresh_logic(app: &mut App) {
 	if let Some(song) = rslt {
 		let clone = song.file_name.clone();
 		update_cursong_data(&mut appdata, &clone);
+	}
+}
+
+/// Removes all folders above the song, leaving only the file name
+fn reduce_song_name(song_name: &str) -> String {
+	let last_char = {
+		let last_bslash = song_name.rfind('\\');
+		let last_slash = song_name.rfind('/');
+
+		match (last_bslash, last_slash) {
+			(Some(bslash), Some(slash)) => {
+				if bslash > slash {bslash} else {slash}
+			}
+			(Some(bslash), None) => bslash,
+			(None, Some(slash)) => slash,
+			(None, None) => 0,
+		}
+	};
+	let slice = &song_name[last_char..];
+	if slice.starts_with('/') || slice.starts_with('\\') {
+		format!("{}", &song_name[last_char + 1..])
+	} else {
+		format!("{}", &song_name[last_char..])
 	}
 }
