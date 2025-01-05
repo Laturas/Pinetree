@@ -19,8 +19,9 @@ impl FileElement {
     }
 }
 
+// I originally stored the folder name here, but as it turns out we don't even need it because
+// To access this we need to grab it from a hashmap
 pub struct FileTreeNode {
-    folder_name: String,
     subfolders: Vec<String>,
     songs: Vec<String>,
 }
@@ -69,7 +70,6 @@ impl FileTreeNode {
         }
 
         Self {
-            folder_name: directory_file_path,
             subfolders: subfolder_list,
             songs: songs_list,
         }
@@ -82,7 +82,6 @@ use std::collections::HashMap;
 /// Deletes any previous information stored in out_vec
 pub fn walk_tree(out_vec: &mut Vec<FileElement>, root_name: &str, hashmap: &HashMap<String, FileTreeNode>) {
     out_vec.clear();
-    let root_name = if root_name.len() == 0 {"./"} else {root_name};
     let result = hashmap.get(root_name);
     if let Some(root_node) = result {
 
@@ -105,9 +104,8 @@ fn walk_tree_recursive(out_vec: &mut Vec<FileElement>, root_name: &str, hashmap:
 
         for dir in &root_node.subfolders {
             out_vec.push(FileElement::new(FileType::Directory, dir.to_owned()));
-            let fullpath = file_path_build(&root_name, &dir);
-            if hashmap.contains_key(&fullpath) {
-                walk_tree_recursive(out_vec, &fullpath, &hashmap);
+            if hashmap.contains_key(dir) {
+                walk_tree_recursive(out_vec, &dir, &hashmap);
             }
         }
         for song in &root_node.songs {
@@ -117,7 +115,7 @@ fn walk_tree_recursive(out_vec: &mut Vec<FileElement>, root_name: &str, hashmap:
 }
 
 pub fn file_path_build(folder_paths: &str, file_name: &str) -> String {
-	if folder_paths.ends_with('/') || folder_paths.ends_with('\\') {
+	if folder_paths.len() == 0 || folder_paths.ends_with('/') || folder_paths.ends_with('\\') {
 		return format!("{}{}", folder_paths, file_name);
 	} else {
 		return format!("{}/{}", folder_paths, file_name);
