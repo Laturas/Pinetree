@@ -21,7 +21,7 @@ use id3::TagLike;
 use egui::{
 	Color32,
 	RichText,
-	TextWrapMode,
+	TextWrapMode, Vec2,
 };
 use std::{
 	collections::HashMap,
@@ -40,7 +40,7 @@ mod filetree;
 
 fn main() -> Result<(), eframe::Error> {
 	let options = eframe::NativeOptions {
-		viewport: egui::ViewportBuilder::default().with_inner_size([690.0, 360.0]).with_icon(load_icon()),
+		viewport: egui::ViewportBuilder::default().with_inner_size([690.0, 360.0]).with_icon(load_icon()).with_min_inner_size(Vec2::new(670.0,360.0)),
 		..Default::default()
 	};
 	let app = App::default();

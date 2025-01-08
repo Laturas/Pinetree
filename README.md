@@ -5,7 +5,8 @@ Right now it may not be the most user-friendly, because I built it originally ju
 ### Polish
 - **\[DONE\]** Come up with an actual name lol
 - **\[DONE\]** Create an exe icon
-- Limit the window resizing capability
+- **\[DONE\]** Limit the window resizing capability
+	- When you make it larger than intended it looks a bit ugly but I really don't care to change that.
 - **\[DONE\]** Add a "saved successfully" text upon successful save
 	- Now make it disappear after a bit
 - **\[DONE\]** Add a warning for when a song doesn't have any saved data associated with it
