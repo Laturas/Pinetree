@@ -19,10 +19,17 @@ use rodio::Source;
 use rand::Rng;
 use id3::TagLike;
 use egui::{
-	Color32, RichText, TextWrapMode
+	Color32,
+	RichText,
+	TextWrapMode,
 };
 use std::{
-	collections::HashMap, fs::{File, OpenOptions}, io::{BufRead, BufReader, Write}, path::Path, sync::{Arc, Mutex}, time::{Duration, SystemTime}
+	collections::HashMap,
+	fs::{File, OpenOptions},
+	io::{BufRead, BufReader, Write},
+	path::Path,
+	sync::{Arc, Mutex},
+	time::{Duration, SystemTime},
 };
 
 // This is a really stupid dependency but as it turns out I guess this is a non-trivial problem???

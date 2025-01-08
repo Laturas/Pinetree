@@ -3,15 +3,15 @@ This is a lightweight, no-bs mp3 player written in Rust.
 Right now it may not be the most user-friendly, because I built it originally just for myself without other considerations. Currently working to make it a bit more accessible, and have more features that everyone will find useful!
 ## TODO:
 ### Polish
-- Come up with an actual name lol
-- Create an exe icon
+- **\[DONE\]** Come up with an actual name lol
+- **\[DONE\]** Create an exe icon
 - Limit the window resizing capability
 - **\[DONE\]** Add a "saved successfully" text upon successful save
 	- Now make it disappear after a bit
 - **\[DONE\]** Add a warning for when a song doesn't have any saved data associated with it
 - **\[FIXED\]** Either fix the initial getting of the song list, or disable it entirely
 - **\[DONE\]** Remove dead and/or useless ui components
-- Add tooltips
+- **\[DONE\]** Add tooltips
 - **\[DONE\]** Bold currently playing song
 - **\[DONE\]** Add greyed out text to search box when empty
 - **\[DONE\]** Make volume slider logarithmic
