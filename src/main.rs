@@ -321,10 +321,15 @@ impl eframe::App for App {
 				}
 			});
 			ui.horizontal(|ui| {
-				if self.force_refresh || ui.button("Refresh").on_hover_text("Reloads the current list of songs").clicked() {
+				if self.force_refresh {
 					refresh_logic(self);
 					self.force_refresh = false;
 				}
+				if ui.button("Refresh").on_hover_text("Hard refreshes the songs and directories list, clearing cached data in the process. Otherwise changes in file structure may not be reflected immediately.").clicked() {
+					hard_refresh(self);
+					self.force_refresh = false;
+				}
+
 				ui.add(egui::TextEdit::singleline(&mut self.search_text).hint_text("Search...").desired_width(175.0)).on_hover_text("Search for a given file name");
 				
 				ui.label("Filters:");
@@ -424,19 +429,25 @@ impl eframe::App for App {
 									let mut appdata = self.appdata.lock().unwrap();
 									(update_cursong_data(&mut appdata, &item), item)
 								};
-								let file = File::open(&fp).unwrap(); // HANDLE THIS at some point. This unwrap actually can fail.
+								let file = File::open(&fp);
 								
 								let mut appdata = self.appdata.lock().unwrap();
 
 								
 								appdata.start_system = SystemTime::now();
-								let reader = BufReader::new(file);
+								let reader: Option<BufReader<File>> = if let Ok(file) = file {
+									Some(BufReader::new(file))
+								} else {None};
 								appdata.song_data_exists = data_exists;
 								(reader, fp)
 							};
 							
 							self.save_data_message = DataSaveError::NoError;
-							self.error = play_song(&mut self.appdata, res.0, &res.1);
+							self.error = if let Some(file_reader) = res.0 {
+								play_song(&mut self.appdata, file_reader, &res.1)
+							} else {
+								format!("Failed to read file (was this song deleted?)")
+							};
 						} else {
 							let appdata = self.appdata.lock().unwrap();
 							if appdata.prewalked.len() == 0 {
@@ -1084,6 +1095,57 @@ fn refresh_logic(app: &mut App) {
 	if !app.filetree_hashmap.contains_key(&root_name) {
 		app.filetree_hashmap.insert(root_name.clone(), FileTreeNode::new(root_name.clone()));
 	}
+
+	walk_tree(&mut appdata.prewalked, &root_name, &app.filetree_hashmap);
+
+	if ofn_exists {
+		let new_pos = appdata.prewalked.iter().enumerate().find(|s| {s.1.file_type == FileType::AudioFile && s.1.file_name == ofn});
+		if let Some(new_index) = new_pos {
+			appdata.cur_song_index = new_index.0;
+		}
+	} else {
+		// This is only in the rare circumstance that the song playing has since been deleted before the refresh.
+		appdata.cur_song_index = 0;
+	}
+	let rslt = appdata.current_playing_song.clone();
+	if let Some(song) = rslt {
+		update_cursong_data(&mut appdata, &song);
+	}
+}
+
+/// Completely resets the hashmap and cached data for a fresh look into the file tree.
+/// Only triggers when you click "Refresh"
+fn hard_refresh(app: &mut App) {
+	// Not resetting this could break things in a billion tiny edge cases and I am NOT handling that.
+	app.search_text = format!("");
+					
+	let mut appdata = app.appdata.lock().unwrap();
+	appdata.song_folder = if app.displayonly_song_folder.len() == 0 || app.displayonly_song_folder.ends_with('/') || app.displayonly_song_folder.ends_with('\\') {
+		app.displayonly_song_folder.clone()
+	} else {
+		format!("{}/", app.displayonly_song_folder)
+	};
+	
+	appdata.current_song_info.nodisplay_time_listened += appdata.start_system.elapsed().unwrap().as_millis();
+	appdata.start_system = SystemTime::now();
+	let current_song = appdata.current_playing_song.clone();
+	save_data_noinsert(
+		&mut appdata, current_song
+	);
+	
+	// This is incredibly weird but I had to do it this way to satisfy the borrow checker.
+	let old_file_name = appdata.prewalked.get(appdata.cur_song_index);
+	let (ofn, ofn_exists) = if let Some(old_file_name) = old_file_name {
+		((*old_file_name).file_name.clone(), true)
+	} else {
+		(String::new(), false)
+	};
+	let root_name = appdata.song_folder.clone();
+
+	let rootnode = FileTreeNode::new(root_name.to_owned());
+	let mut ftree_hmap: HashMap<String, FileTreeNode> = HashMap::new();
+	ftree_hmap.insert(root_name.to_owned(), rootnode);
+	app.filetree_hashmap = ftree_hmap;
 
 	walk_tree(&mut appdata.prewalked, &root_name, &app.filetree_hashmap);
 
