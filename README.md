@@ -33,7 +33,7 @@ Right now it may not be the most user-friendly, because I built it originally ju
 - **\[MOSTLY FIXED\]** There's a lot of `unwrap()` calls left that need to be handled/vetted.
 	- Note: There are still like 40, but most I will not be handling. There's a comment at the top of main.rs that explains why.
 ### Features
-- **(WIP)** Allow song grouping into folders
+- **\[ADDED\]** Allow song grouping into folders
 - **\[ADDED\]** Create shuffle feature and in-order playing
 - Maybe add speeding up/slowing down of audio?
 ### Optimization
