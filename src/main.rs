@@ -149,6 +149,8 @@ struct App {
 	search_text: String,
 	genre_filter: String,
 	artist_filter: String,
+	searched_genre: String,
+	searched_artist: String,
 	error: String,
 	volume: f32,
 	save_data_message: DataSaveError,
@@ -258,6 +260,8 @@ impl Default for App {
 
 			displayonly_song_folder: format!("songs/"),
 			filetree_hashmap: ftree_hmap,
+			searched_genre: format!(""),
+			searched_artist: format!(""),
 		}
 	}
 }
@@ -340,11 +344,20 @@ impl eframe::App for App {
 			ui.horizontal(|ui| {
 				ui.set_min_height(200.0);
 				ui.vertical(|ui| {
+					let nonempty_search_terms = {
+						   self.search_text.len() != 0
+						|| self.artist_filter.len() != 0
+						|| self.genre_filter.len() != 0
+					};
 					let mut use_search_results = {
 						let aplock = self.appdata.lock().unwrap();
-						self.search_text.len() != 0 && self.search_text == aplock.search_text_results
+						nonempty_search_terms
+
+						&& self.search_text == aplock.search_text_results
+						&& self.artist_filter == self.searched_artist
+						&& self.genre_filter == self.searched_genre
 					};
-					let dont_search = self.search_text.len() == 0;
+					let dont_search = !nonempty_search_terms;
 
 					let total = 
 					if use_search_results {
@@ -358,12 +371,34 @@ impl eframe::App for App {
 							let mut new_search_results: Vec<usize> = Vec::new();
 							aplock.search_results.clear();
 							for (index, dir) in (&aplock.prewalked).into_iter().enumerate() {
-								if ((&dir.file_name).to_lowercase()).contains(&self.search_text.to_lowercase()) {
+								let reduced = &reduce_song_name(&dir.file_name);
+								if self.genre_filter.len() != 0 {
+									if let Some(s) = aplock.dat_map.get(reduced) {
+										if !s.split(',').into_iter().nth(3).unwrap_or("").to_lowercase().contains(&self.genre_filter.to_lowercase()) {
+											continue;
+										}
+									} else {
+										continue;
+									}
+								}
+								if self.artist_filter.len() != 0 {
+									if let Some(s) = aplock.dat_map.get(reduced) {
+										if !s.split(',').into_iter().nth(2).unwrap_or("").to_lowercase().contains(&self.artist_filter.to_lowercase()) {
+											continue;
+										}
+									} else {
+										continue;
+									}
+								}
+								//((&dir.file_name).to_lowercase()).contains(&self.search_text.to_lowercase())
+								if self.search_text.len() == 0 || ((&dir.file_name).to_lowercase()).contains(&self.search_text.to_lowercase()) {
 									new_search_results.push(index);
 								}
 							}
 							use_search_results = true;
 							aplock.search_text_results = self.search_text.clone();
+							self.searched_artist = self.artist_filter.clone();
+							self.searched_genre = self.genre_filter.clone();
 							aplock.search_results = new_search_results;
 							aplock.search_results.len()
 						}
@@ -859,6 +894,28 @@ fn initialize_data_map(data_map: &mut HashMap<String,String>) {
 		}
 	}
 }
+
+//fn get_song_data(appdata: SharedAppData, song_name: &str) -> Option<SongInfo> {
+//	let map_data = appdata.dat_map.get(&reduce_song_name(song_name));
+//
+//	if let Some(map_data) = map_data {
+//		let new_song_info: SongInfo = SongInfo {
+//			name: todo!(),
+//			artist: todo!(),
+//			genre: todo!(),
+//			nodisplay_time_listened: todo!(),
+//		};
+//		let collection = map_data.split(',').collect::<Vec<&str>>();
+//
+//		appdata.current_song_info.name = (**collection.get(1).unwrap_or(&format!("").as_str())).to_string();
+//		appdata.current_song_info.artist = (**collection.get(2).unwrap_or(&format!("").as_str())).to_string();
+//		appdata.current_song_info.genre = (**collection.get(3).unwrap_or(&format!("").as_str())).to_string();
+//		appdata.current_song_info.nodisplay_time_listened = (**collection.get(4).unwrap_or(&format!("").as_str())).to_string().parse().unwrap_or(0);
+//		return true;
+//	} else {
+//		return None
+//	}
+//}
 
 fn update_cursong_data(appdata: &mut SharedAppData, song_name: &str) -> bool {
 	let map_data = appdata.dat_map.get(&reduce_song_name(song_name));
