@@ -1,6 +1,6 @@
 [package]
 name = "dreamer"
-version = "0.9.1"
+version = "1.0.0"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -17,3 +17,4 @@ mp3-duration = "0.1.10"
 rodio = "0.20.*"
 rand = "0.8"
 id3 = "1.16.0"
+image = "0.24.2"

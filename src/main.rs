@@ -33,7 +33,7 @@ mod filetree;
 
 fn main() -> Result<(), eframe::Error> {
 	let options = eframe::NativeOptions {
-		viewport: egui::ViewportBuilder::default().with_inner_size([690.0, 360.0]),
+		viewport: egui::ViewportBuilder::default().with_inner_size([690.0, 360.0]).with_icon(load_icon()),
 		..Default::default()
 	};
 	let app = App::default();
@@ -59,10 +59,29 @@ fn main() -> Result<(), eframe::Error> {
         }
 	});
 	eframe::run_native(
-		"Dreamer",
+		"Pinetree Mp3 Player",
 		options,
 		Box::new(|_cc| {Ok(Box::new(app))}),
 	)
+}
+use image;
+
+pub(crate) fn load_icon() -> egui::IconData {
+	let (icon_rgba, icon_width, icon_height) = {
+		let icon = include_bytes!("../resources/Pinetree Logo.ico");
+		let image = image::load_from_memory(icon)
+			.expect("Failed to open icon path")
+			.into_rgba8();
+		let (width, height) = image.dimensions();
+		let rgba = image.into_raw();
+		(rgba, width, height)
+	};
+	
+	egui::IconData {
+		rgba: icon_rgba,
+		width: icon_width,
+		height: icon_height,
+	}
 }
 
 struct SongInfo {
@@ -246,7 +265,7 @@ impl eframe::App for App {
 		ctx.set_pixels_per_point(1.33);
 
 		egui::CentralPanel::default().show(ctx, |ui| {
-			ui.heading("Kate's Untitled MP3 Player");
+			ui.heading("Pinetree Mp3 Player");
 			ui.horizontal(|ui| {
 				let mut appdata = self.appdata.lock().unwrap();
 				ui.label("When a song ends: ");
