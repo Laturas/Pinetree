@@ -40,7 +40,7 @@ mod filetree;
 
 fn main() -> Result<(), eframe::Error> {
 	let options = eframe::NativeOptions {
-		viewport: egui::ViewportBuilder::default().with_inner_size([690.0, 360.0]).with_icon(load_icon()).with_min_inner_size(Vec2::new(670.0,360.0)),
+		viewport: egui::ViewportBuilder::default().with_icon(load_icon()).with_min_inner_size(Vec2::new(670.0,360.0)),
 		..Default::default()
 	};
 	let app = App::default();
@@ -276,6 +276,7 @@ impl eframe::App for App {
 		ctx.set_pixels_per_point(1.33);
 
 		egui::CentralPanel::default().show(ctx, |ui| {
+			let scroll_height = ctx.input(|i| i.viewport().outer_rect.unwrap().height()) - 175 as f32;
 			ui.heading("Pinetree Mp3 Player");
 			ui.horizontal(|ui| {
 				let mut appdata = self.appdata.lock().unwrap();
@@ -344,6 +345,7 @@ impl eframe::App for App {
 			ui.horizontal(|ui| {
 				ui.set_min_height(200.0);
 				ui.vertical(|ui| {
+					ui.set_height(scroll_height);
 					let nonempty_search_terms = {
 						   self.search_text.len() != 0
 						|| self.artist_filter.len() != 0
@@ -352,7 +354,7 @@ impl eframe::App for App {
 					let mut use_search_results = {
 						let aplock = self.appdata.lock().unwrap();
 						nonempty_search_terms
-
+						
 						&& self.search_text == aplock.search_text_results
 						&& self.artist_filter == self.searched_artist
 						&& self.genre_filter == self.searched_genre
@@ -403,6 +405,7 @@ impl eframe::App for App {
 							aplock.search_results.len()
 						}
 					};
+					
 					egui::ScrollArea::vertical().show_rows(ui, 16.0, total,|ui, row_range| {
 						ui.set_max_width(275.0);
 						ui.set_min_width(275.0);
@@ -711,15 +714,6 @@ impl eframe::App for App {
 					appdata.current_song_info.nodisplay_time_listened += appdata.start_system.elapsed().unwrap().as_millis();
 					appdata.start_system = SystemTime::now();
 					appdata.start_milis = appdata.position;
-				} else {
-					let (sel_type, empt) = {
-						let appdata = self.appdata.lock().unwrap();
-						let empt = appdata.sink.empty();
-						(appdata.sel_type.clone(), empt)
-					};
-					if empt {
-						self.error = handle_song_end(sel_type, &mut self.appdata);
-					}
 				}
 				let mut appdata = self.appdata.lock().unwrap();
 				let pos = appdata.position;
@@ -1124,7 +1118,11 @@ fn add_font(ctx: &egui::Context) {
 
 fn refresh_logic(app: &mut App) {
 	// Not resetting this could break things in a billion tiny edge cases and I am NOT handling that.
-	app.search_text = format!("");
+	//app.search_text = format!("");
+	{
+		let mut appdata = app.appdata.lock().unwrap();
+		appdata.search_text_results = format!("");
+	}
 					
 	let mut appdata = app.appdata.lock().unwrap();
 	appdata.song_folder = if app.displayonly_song_folder.len() == 0 || app.displayonly_song_folder.ends_with('/') || app.displayonly_song_folder.ends_with('\\') {
