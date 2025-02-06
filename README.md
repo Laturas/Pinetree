@@ -1,14 +1,11 @@
-This is a lightweight, no-bs mp3 player written in Rust.
+Pinetree is a lightweight and simple to use mp3 player written in Rust!
 
-Right now it may not be the most user-friendly, because I built it originally just for myself without other considerations. Currently working to make it a bit more accessible, and have more features that everyone will find useful!
 ## TODO:
 ### Polish
 - **\[DONE\]** Come up with an actual name lol
 - **\[DONE\]** Create an exe icon
 - **\[DONE\]** Limit the window resizing capability
-	- When you make it larger than intended it looks a bit ugly but I really don't care to change that.
 - **\[DONE\]** Add a "saved successfully" text upon successful save
-	- Now make it disappear after a bit
 - **\[DONE\]** Add a warning for when a song doesn't have any saved data associated with it
 - **\[FIXED\]** Either fix the initial getting of the song list, or disable it entirely
 - **\[DONE\]** Remove dead and/or useless ui components
@@ -27,7 +24,7 @@ Right now it may not be the most user-friendly, because I built it originally ju
 	- This is only marked partially fixed because it's hard to verify if you have support for every character set you'd need. The goal right now is just to have support for most of the majorly used character sets (If you find broken examples, let me know!)
 	- Added support for Kanji
 	- Verified Cyrillic and nonstandard latin characters work
-	- Want to add Korean and Arabic next
+	- Want to add Arabic next
 - **\[FIXED\]** Fix data not being grabbed when song first loaded.
 - **\[FIXED\]** Fix desync between timer and position within the song when dragging to the end
 - **\[MOSTLY FIXED\]** There's a lot of `unwrap()` calls left that need to be handled/vetted.
@@ -38,7 +35,7 @@ Right now it may not be the most user-friendly, because I built it originally ju
 - Maybe add speeding up/slowing down of audio?
 ### Optimization
 - **\[DONE\]** Cache search results into a separate vec to avoid having to linear search each redraw
-- **\[DONE\]** Optimize large scroll areas (somehow??? (nvm it was actually really easy))
+- **\[DONE\]** Optimize large scroll areas
 ### Other
 - Create a user manual/documentation
 - Make a download page
