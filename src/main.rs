@@ -21,7 +21,8 @@ use id3::TagLike;
 use egui::{
 	Color32,
 	RichText,
-	TextWrapMode, Vec2, ViewportBuilder,
+	TextWrapMode,
+	Vec2,
 };
 use std::{
 	collections::HashMap, fs::{File, OpenOptions}, io::{BufRead, BufReader, Write}, path::Path, sync::{Arc, Mutex}, time::{Duration, SystemTime}
@@ -35,7 +36,7 @@ mod filetree;
 
 fn main() -> Result<(), eframe::Error> {
 	let options = eframe::NativeOptions {
-		viewport: egui::ViewportBuilder::default().with_icon(load_icon()).with_min_inner_size(Vec2::new(670.0,360.0)),
+		viewport: egui::ViewportBuilder::default().with_icon(load_icon()).with_min_inner_size(Vec2::new(670.0,360.0)).with_inner_size(Vec2::new(670.0,360.0)),
 		..Default::default()
 	};
 	let app = App::default();
