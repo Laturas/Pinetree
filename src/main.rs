@@ -21,15 +21,10 @@ use id3::TagLike;
 use egui::{
 	Color32,
 	RichText,
-	TextWrapMode, Vec2,
+	TextWrapMode, Vec2, ViewportBuilder,
 };
 use std::{
-	collections::HashMap,
-	fs::{File, OpenOptions},
-	io::{BufRead, BufReader, Write},
-	path::Path,
-	sync::{Arc, Mutex},
-	time::{Duration, SystemTime},
+	collections::HashMap, fs::{File, OpenOptions}, io::{BufRead, BufReader, Write}, path::Path, sync::{Arc, Mutex}, time::{Duration, SystemTime}
 };
 
 // This is a really stupid dependency but as it turns out I guess this is a non-trivial problem???
@@ -126,7 +121,6 @@ struct SharedAppData {
 	search_results: Vec<usize>,
 	sel_type: SelectionType,
 	cur_song_index: usize,
-	//songs_list: Vec<String>,
 	start_system: SystemTime,
 	song_folder: String,
 	start_milis: u64,
@@ -223,7 +217,6 @@ impl Default for SharedAppData {
 			sink: rodio::Sink::try_new(&i2).unwrap(),
 			sel_type: SelectionType::None,
 			cur_song_index: 0,
-			//songs_list: songls,
 			start_system: SystemTime::now(),
 			song_folder: format!("songs/"),
 			total_duration: 0,
@@ -737,6 +730,9 @@ impl eframe::App for App {
 				});
 			});
 		});
+		let size = ctx.used_size();
+		ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(size));
+		ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize(Vec2::new(size.x, 300.0)));
 	}
 }
 
