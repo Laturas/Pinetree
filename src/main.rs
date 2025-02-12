@@ -139,6 +139,7 @@ struct SharedAppData {
 }
 struct App {
 	appdata: Arc<Mutex<SharedAppData>>,
+	app_initialized: i32,
 	
 	// Not accessed from other threads
 	search_text: String,
@@ -243,6 +244,7 @@ impl Default for App {
 		ftree_hmap.insert(default_directory.to_owned(), rootnode);
 		Self {
 			appdata: ad,
+			app_initialized: 0,
 			search_text: format!(""),
 			genre_filter: format!(""),
 			artist_filter: format!(""),
@@ -270,7 +272,12 @@ impl eframe::App for App {
 		ctx.set_pixels_per_point(1.33);
 
 		egui::CentralPanel::default().show(ctx, |ui| {
-			let scroll_height = ctx.input(|i| i.viewport().outer_rect.unwrap().height()) - 175 as f32;
+			let scroll_height = ctx.input(|i| {
+				match i.viewport().outer_rect {
+					Some(v) => v.height(),
+					None => 176 as f32,
+				}
+			}) - 175 as f32;
 			ui.heading("Pinetree Mp3 Player");
 			ui.horizontal(|ui| {
 				let mut appdata = self.appdata.lock().unwrap();
@@ -731,9 +738,13 @@ impl eframe::App for App {
 				});
 			});
 		});
-		let size = ctx.used_size();
-		ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(size));
-		ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize(Vec2::new(size.x, 300.0)));
+		// I have no clue why I need to run it this many times, but I do.
+		if self.app_initialized < 5 {
+			let size = ctx.used_size();
+			ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(size));
+			ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize(Vec2::new(size.x, 300.0)));
+			self.app_initialized += 1;
+		}
 	}
 }
 
