@@ -393,7 +393,6 @@ impl eframe::App for App {
 										continue;
 									}
 								}
-								//((&dir.file_name).to_lowercase()).contains(&self.search_text.to_lowercase())
 								if self.search_text.len() == 0 || ((&dir.file_name).to_lowercase()).contains(&self.search_text.to_lowercase()) {
 									new_search_results.push(index);
 								}
@@ -448,6 +447,7 @@ impl eframe::App for App {
 							current_song_clone
 						};
 						// BUG: Currently the program assumes the previous song is in the same folder which unfortunate transfers song listen duration incorrectly.
+						// ^^^^ Future Kate here, I can't remember if I fixed this. I'm gonna assume I did.
 						if song_change_triggered {
 							let res = {
 								// I will just assume this unwrap will never fail.
@@ -788,14 +788,6 @@ fn play_song(appdata: &mut Arc<Mutex<SharedAppData>>, reader: BufReader<File>, f
 				!sink.is_paused() && !sink.empty()
 			};
 
-			//if to_save {
-			//	let mut aplock = appdata.lock().unwrap();
-			//	aplock.current_song_info.nodisplay_time_listened += aplock.start_system.elapsed().unwrap().as_millis();
-			//	let current_song = aplock.current_playing_song.clone();
-			//	save_data_noinsert(
-			//		&mut aplock, current_song
-			//	);
-			//}
 			// This lock cannot be merged into the one within the if statement because of the save data call.
 			let mut appdata_mut = appdata.lock().unwrap();
 			appdata_mut.start_system = SystemTime::now();
@@ -896,28 +888,6 @@ fn initialize_data_map(data_map: &mut HashMap<String,String>) {
 		}
 	}
 }
-
-//fn get_song_data(appdata: SharedAppData, song_name: &str) -> Option<SongInfo> {
-//	let map_data = appdata.dat_map.get(&reduce_song_name(song_name));
-//
-//	if let Some(map_data) = map_data {
-//		let new_song_info: SongInfo = SongInfo {
-//			name: todo!(),
-//			artist: todo!(),
-//			genre: todo!(),
-//			nodisplay_time_listened: todo!(),
-//		};
-//		let collection = map_data.split(',').collect::<Vec<&str>>();
-//
-//		appdata.current_song_info.name = (**collection.get(1).unwrap_or(&format!("").as_str())).to_string();
-//		appdata.current_song_info.artist = (**collection.get(2).unwrap_or(&format!("").as_str())).to_string();
-//		appdata.current_song_info.genre = (**collection.get(3).unwrap_or(&format!("").as_str())).to_string();
-//		appdata.current_song_info.nodisplay_time_listened = (**collection.get(4).unwrap_or(&format!("").as_str())).to_string().parse().unwrap_or(0);
-//		return true;
-//	} else {
-//		return None
-//	}
-//}
 
 fn update_cursong_data(appdata: &mut SharedAppData, song_name: &str) -> bool {
 	let map_data = appdata.dat_map.get(&reduce_song_name(song_name));
@@ -1126,7 +1096,6 @@ fn add_font(ctx: &egui::Context) {
 
 fn refresh_logic(app: &mut App) {
 	// Not resetting this could break things in a billion tiny edge cases and I am NOT handling that.
-	//app.search_text = format!("");
 	{
 		let mut appdata = app.appdata.lock().unwrap();
 		appdata.search_text_results = format!("");
