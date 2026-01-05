@@ -104,7 +104,7 @@ struct RodioData {
 }
 
 enum MessageToGui {
-	None,
+	// None,
 	Data(RodioData),
 }
 
@@ -122,7 +122,6 @@ struct AudioThreadData {
 	speed: f32,
 	reverb: f32,
 	end_behavior: LoopBehavior,
-	test: usize,
 }
 
 // struct DirTreeElement {
@@ -281,10 +280,25 @@ fn song_end_callback(pair: Arc<(Mutex<Vec<MessageToAudio>>, Condvar)>) {
 	send_audio_signal(&pair, MessageToAudio::SongEnd);
 }
 
+
 /* TODO: God damnit rodio */
 use mp3_duration;
+use rand;
+use rand::Rng;
 
-fn audio_thread_loop(recieve_pair: Arc<(Mutex<Vec<MessageToAudio>>, Condvar)>, send_pair: Arc<(Mutex<Vec<MessageToGui>>, Condvar)>) {
+/**
+* Audio thread maintains its own list it works on, going through each element in that during the "Next".
+* 
+* When a new song is played:
+* - GUI thread checks if the current directory tree is the same as the one the audio thread has
+* 	- If it isn't, send an updated one.
+* - Send the current song.
+* - Audio thread looks through to find the new index.
+*/
+fn audio_thread_loop(
+	recieve_pair: Arc<(Mutex<Vec<MessageToAudio>>, Condvar)>,
+	send_pair: Arc<(Mutex<Vec<MessageToGui>>, Condvar)>
+) {
 	let (output_stream, audio_sink) = rodio::OutputStream::try_default().unwrap();
 	let mut song_path = "".to_string();
 	let mut song_index = 0;
@@ -293,11 +307,10 @@ fn audio_thread_loop(recieve_pair: Arc<(Mutex<Vec<MessageToAudio>>, Condvar)>, s
 		// This has to exist even if unused, otherwise the lifetime causes the program to crash
 		_stream: output_stream,
 		sink: rodio::Sink::try_new(&audio_sink).unwrap(),
-		volume: DEFAULT_VOLUME,
+		volume: volume_curve(DEFAULT_VOLUME),
 		speed: DEFAULT_SPEED,
 		reverb: DEFAULT_REVERB,
 		end_behavior: LoopBehavior::Stop,
-		test: 0,
 	};
 	audio_thread_data.sink.set_volume(audio_thread_data.volume);
 	let lock = &recieve_pair.0;
@@ -307,93 +320,97 @@ fn audio_thread_loop(recieve_pair: Arc<(Mutex<Vec<MessageToAudio>>, Condvar)>, s
 	loop {
 		// If this unwrap fails, it should crash.
 		data_vec = cvar.wait(data_vec).unwrap();
-		while data_vec.len() > 0 {
-			if let Some(data) = data_vec.get(data_vec.len() - 1) {
-				match data {
-					MessageToAudio::None => {println!("Do nothing");},
-					MessageToAudio::PlaySong(song) => {
-						song_path = song.clone();
-						song_length = if let Some(len) = audio_thread_play_song(&song, &mut audio_thread_data.sink, &recieve_pair) {
-							len
+		while let Some(data) = data_vec.pop() {
+			match data {
+				// MessageToAudio::None => {println!("Do nothing");},
+				MessageToAudio::PlaySong(song) => {
+					song_index = {
+						let mut loc = 0;
+						for i in 0..current_songs_collection.len() {
+							if let Some(e) = current_songs_collection.get(i) && *e == song {
+								loc = i;
+								break;
+							}
 						}
-						else {0};
-					},
-					/* TODO: Make this do something */
-					MessageToAudio::UpdateEndBehavior(loop_behavior) => {
-						audio_thread_data.end_behavior = clone_loop_behavior(&loop_behavior);
-					},
-					MessageToAudio::UpdateVolume(volume) => {
-						audio_thread_data.volume = *volume;
-						audio_thread_data.sink.set_volume(audio_thread_data.volume);
-					},
-					MessageToAudio::RequestRodioData => {
-						let send_lock = &send_pair.0;
-						let send_cvar = &send_pair.1;
-						let mut response_vec = send_lock.lock().unwrap();
-						response_vec.push(MessageToGui::Data(RodioData {
-							song_length: song_length,
-							playback_position: audio_thread_data.sink.get_pos().as_millis() as usize,
-							is_paused: audio_thread_data.sink.is_paused(),
-							song_name: song_path.clone(),
-						}));
-						send_cvar.notify_one();
-					},
-					MessageToAudio::Seek(position) => {
-						let _ = audio_thread_data.sink.try_seek(std::time::Duration::from_millis(*position));
-					},
-					MessageToAudio::TogglePause => {
-						if audio_thread_data.sink.is_paused() {
-							audio_thread_data.sink.play();
-						} else {
-							audio_thread_data.sink.pause();
-						}
-					},
-					MessageToAudio::SongEnd => {
-						audio_thread_data.sink.clear();
-						match audio_thread_data.end_behavior {
-							LoopBehavior::Stop => {
-								song_path = "".to_string();
-							},
-							LoopBehavior::Loop => {
-								song_length = if let Some(len) = audio_thread_play_song(&song_path, &mut audio_thread_data.sink, &recieve_pair) {
-									len
-								}
-								else {0};
-							},
-							/* TODO: */
-							LoopBehavior::Next => {
-								if current_songs_collection.len() > 0 {
-									if let Some(song) = current_songs_collection.get((song_index + 1) % current_songs_collection.len() as usize) {
-										song_path = song.to_string();
-										song_length = if let Some(len) = audio_thread_play_song(&song_path, &mut audio_thread_data.sink, &recieve_pair) {
-											len
-										}
-										else {0};
+						loc
+					};
+					song_path = song.clone();
+					song_length = if let Some(len) = audio_thread_play_song(&song, &mut audio_thread_data.sink, &recieve_pair) {
+						len
+					}
+					else {0};
+				},
+				MessageToAudio::UpdateEndBehavior(loop_behavior) => {
+					audio_thread_data.end_behavior = clone_loop_behavior(&loop_behavior);
+				},
+				MessageToAudio::UpdateVolume(volume) => {
+					audio_thread_data.volume = volume;
+					audio_thread_data.sink.set_volume(audio_thread_data.volume);
+				},
+				MessageToAudio::RequestRodioData => {
+					let send_lock = &send_pair.0;
+					let send_cvar = &send_pair.1;
+					let mut response_vec = send_lock.lock().unwrap();
+					response_vec.push(MessageToGui::Data(RodioData {
+						song_length: song_length,
+						playback_position: audio_thread_data.sink.get_pos().as_millis() as usize,
+						is_paused: audio_thread_data.sink.is_paused(),
+						song_name: song_path.clone(),
+					}));
+					send_cvar.notify_one();
+				},
+				MessageToAudio::Seek(position) => {
+					let _ = audio_thread_data.sink.try_seek(std::time::Duration::from_millis(position));
+				},
+				MessageToAudio::TogglePause => {
+					if audio_thread_data.sink.is_paused() {
+						audio_thread_data.sink.play();
+					} else {
+						audio_thread_data.sink.pause();
+					}
+				},
+				MessageToAudio::SongEnd => {
+					audio_thread_data.sink.clear();
+					match audio_thread_data.end_behavior {
+						LoopBehavior::Stop => {
+							song_path = "".to_string();
+						},
+						LoopBehavior::Loop => {
+							song_length = if let Some(len) = audio_thread_play_song(&song_path, &mut audio_thread_data.sink, &recieve_pair) {
+								len
+							}
+							else {0};
+						},
+						LoopBehavior::Next => {
+							song_index = (song_index + 1) % current_songs_collection.len() as usize;
+							if current_songs_collection.len() > 0 {
+								if let Some(song) = current_songs_collection.get(song_index) {
+									song_path = song.to_string();
+									song_length = if let Some(len) = audio_thread_play_song(&song_path, &mut audio_thread_data.sink, &recieve_pair) {
+										len
 									}
+									else {0};
 								}
 							}
-							/* TODO: */
-							LoopBehavior::Shuffle => {
-								println!("Unimplemented");
-							}
 						}
-					},
-					MessageToAudio::SetSongCollection(vec) => {
-						current_songs_collection.clear();
-						let mut i = 0;
-						let mut found = false;
-						for song in vec {
-							if !found && *song == *song_path {
-								song_index = i;
-								found = true;
+						LoopBehavior::Shuffle => {
+							if current_songs_collection.len() > 0 {
+								song_index = rand::thread_rng().gen_range(0..current_songs_collection.len());
+								if let Some(song) = current_songs_collection.get(song_index) {
+									song_path = song.to_string();
+									song_length = if let Some(len) = audio_thread_play_song(&song_path, &mut audio_thread_data.sink, &recieve_pair) {
+										len
+									}
+									else {0};
+								}
 							}
-							i += 1;
-							/* TODO: Ughhh */
-							current_songs_collection.push(song.clone());
 						}
 					}
+				},
+				MessageToAudio::SetSongCollection(vec, optional_index) => {
+					current_songs_collection = vec;
+					song_index = if let Some(index) = optional_index {index} else {current_songs_collection.len() - 1};
 				}
-				data_vec.pop();
 			}
 		}
 	}
@@ -410,9 +427,9 @@ fn request_rodio_data(send_pair: &Arc<(Mutex<Vec<MessageToAudio>>, Condvar)>, re
 			}
 			if let Some(element) = vec.get(0) {
 				match element {
-					MessageToGui::None => {
-						vec.pop();
-					},
+					// MessageToGui::None => {
+					// 	vec.pop();
+					// },
 					MessageToGui::Data(data) => {
 						let ret = data.clone();
 						vec.pop();
@@ -442,7 +459,7 @@ fn send_audio_signal(pair: &Arc<(Mutex<Vec<MessageToAudio>>, Condvar)>, message:
 
 #[derive(PartialEq)]
 enum MessageToAudio {
-	None,
+	// None,
 	PlaySong(String),
 	UpdateEndBehavior(LoopBehavior),
 	UpdateVolume(f32),
@@ -450,7 +467,11 @@ enum MessageToAudio {
 	Seek(u64),
 	TogglePause,
 	SongEnd,
-	SetSongCollection(Vec<String>),
+	/**
+	* Tells the audio thread to set its current collection to Vec<String>,
+	* and that the current playing song is at the optional location
+	*/
+	SetSongCollection(Vec<String>, Option<usize>),
 }
 
 impl Default for MyApp {
@@ -672,9 +693,6 @@ struct DirTreeElement {
 	is_active: bool,
 }
 
-/**
-* TODO: Cache this result somehow
-*/
 fn get_dir_tree_elements(output_vec: &mut Vec<DirTreeElement>, directory_string: &str, map: &HashMap<String, Directory>, depth: usize) {
 	let map_result = map.get(directory_string);
 	if let Some(directory) = map_result {
@@ -905,7 +923,6 @@ impl eframe::App for MyApp {
 				ui.label(if audio_data.song_name == "" {format!("No song playing")} else {format!("Now playing: {}", extract_file_name(&audio_data.song_name))})
 			});
 			ui.horizontal(|ui| {
-				/* TODO: Implement Pause and Skip*/
 				if ui.button(if audio_data.is_paused {format!("Unpause")} else {format!("Pause")}).clicked() {
 					send_audio_signal(&self.audio_message_channel, MessageToAudio::TogglePause);
 				}
@@ -997,13 +1014,17 @@ impl eframe::App for MyApp {
 						let mut new_tree = Vec::<DirTreeElement>::new();
 						let mut collection = Vec::<String>::new();
 						get_dir_tree_elements(&mut new_tree, &active_directory.filepath_identifier, &self.directory_map, 0);
+						let mut new_current_location: Option<usize> = None;
 
 						for el in &new_tree {
 							if !el.is_dir {
+								if let None = new_current_location && el.name == audio_data.song_name {
+									new_current_location = Some(collection.len());
+								}
 								collection.push(el.name.clone());
 							}
 						}
-						send_audio_signal(&self.audio_message_channel, MessageToAudio::SetSongCollection(collection));
+						send_audio_signal(&self.audio_message_channel, MessageToAudio::SetSongCollection(collection, new_current_location));
 						self.directory_tree = Some(new_tree);
 					}
 					let searching = self.search_text != "";
@@ -1034,16 +1055,20 @@ impl eframe::App for MyApp {
 					if let Some(active_playlist_index) = self.active_playlist_index {
 						let mut tree = Vec::<PlaylistTreeElement>::new();
 						let mut collection = Vec::<String>::new();
+						let mut new_current_location: Option<usize> = None;
 						if let Some(playlist) = self.playlists.get(active_playlist_index) {
 							for song in &playlist.songs {
 								tree.push(PlaylistTreeElement {
 									song_name: Some(song.clone()),
 									playlist_position: 0,
 								});
-								collection.push(song.to_string());
+								if let None = new_current_location && *song == audio_data.song_name {
+									new_current_location = Some(collection.len());
+								}
+								collection.push(song.to_string()); /* COME TO*/
 							}
 							self.playlist_tree = Some(tree);
-							send_audio_signal(&self.audio_message_channel, MessageToAudio::SetSongCollection(collection));
+							send_audio_signal(&self.audio_message_channel, MessageToAudio::SetSongCollection(collection, new_current_location));
 						} else {
 							ui.label(format!("Unknown playlist error"));
 							self.playlist_tree = None;
@@ -1057,6 +1082,7 @@ impl eframe::App for MyApp {
 					ui.horizontal(|ui| {
 						if ui.button("Edit songs").clicked() {
 							request_refresh = true;
+							/* TODO: Implement */
 							self.edit_playlist_data = init_edit_playlist_data(active_playlist_index, &self.playlists);
 						}
 						if ui.button("Go back").clicked() {
