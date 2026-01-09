@@ -5,10 +5,6 @@ edition = "2024"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
-[profile.release]
-strip = true  # Automatically strip symbols from the binary.
-lto = true
-panic = "abort"
 
 [dependencies]
 eframe = "0.29.1"
@@ -16,5 +12,17 @@ egui = "0.29.1"
 mp3-duration = "0.1.10"
 rodio = "0.20.*"
 rand = "0.8"
-id3 = "1.16.0"
-image = "0.24.2"
+shortcuts-rs = "1.1.1"
+
+[target.'cfg(windows)'.build-dependencies]
+winres = "0.1"
+
+[package.metadata.winres]
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = ">= 0.59.0", features = [
+    "Win32_UI_Shell",
+    "Win32_Globalization",
+    "Win32_System_Com",
+    "Win32_UI_Shell_Common",
+] }
