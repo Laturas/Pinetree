@@ -104,19 +104,23 @@ enum CentralPanelMode {
 
 struct PersistentData {
 	data_file_exists: bool,
+	hide_directories_by_default: bool,
 	data_file_version: String,
 	default_directory: String,
 	theme: ThemePref,
 	playlists: Vec<Playlist>,
+	default_on_finish: LoopBehavior,
 }
 
 fn default_persistent_data() -> PersistentData {
 	PersistentData {
 		data_file_exists: false,
+		hide_directories_by_default: false,
 		data_file_version: "".to_string(),
 		default_directory: "".to_string(),
 		theme: ThemePref::DARK,
 		playlists: init_playlist_from_filepath(""),
+		default_on_finish: LoopBehavior::Stop,
 	}
 }
 
@@ -234,6 +238,7 @@ struct MyApp {
 	first_frame_rendered: bool,
 
 	loop_behavior: LoopBehavior,
+	default_on_finish: LoopBehavior,
 	browse_mode: LeftPanelMode,
 
 	current_song_folder: String,
@@ -494,8 +499,6 @@ fn audio_thread_loop(
 	let mut current_timestamp: u128 = 0;
 	let mut song_play_err = None;
 	loop {
-		// If this unwrap fails, it should crash.
-		data_vec = cvar.wait(data_vec).unwrap();
 		while let Some(data) = data_vec.pop() {
 			match data {
 				// MessageToAudio::None => {println!("Do nothing");},
@@ -640,26 +643,28 @@ fn audio_thread_loop(
 				},
 			}
 		}
+		// If this unwrap fails, it should crash.
+		data_vec = cvar.wait(data_vec).unwrap();
 	}
 }
 
 fn request_rodio_data(send_pair: &Arc<(Mutex<Vec<MessageToAudio>>, Condvar)>, recv_pair: &Arc<(Mutex<Vec<MessageToGui>>, Condvar)>) -> RodioData {
 	let lock = &recv_pair.0;
 	let cvar = &recv_pair.1;
+	send_audio_signal(send_pair, MessageToAudio::RequestRodioData);
+
 	if let Ok(mut vec) = lock.lock() {
-		send_audio_signal(send_pair, MessageToAudio::RequestRodioData);
 		loop {
 			while vec.len() == 0 {
 				vec = cvar.wait(vec).unwrap();
 			}
-			if let Some(element) = vec.get(0) {
+			if let Some(element) = vec.pop() {
 				match element {
 					// MessageToGui::None => {
 					// 	vec.pop();
 					// },
 					MessageToGui::Data(data) => {
 						let ret = data.clone();
-						vec.pop();
 						return ret;
 					},
 				}
@@ -760,10 +765,38 @@ fn find_persistent_data() -> (PersistentData, String) {
 			else if current_state == State::Settings {
 				let theme_identifier = "Theme: ";
 				let default_directory_identifier = "Default Directory: ";
+				let hide_dirs_identifier = "Hide Directories: "; 
+				let default_end_behavior_identifier = "Default End Behavior: "; 
 				if line.starts_with(theme_identifier) {
 					persistent_data.theme = str_to_theme_preference(&line[theme_identifier.len()..]);
 				} else if line.starts_with(default_directory_identifier) {
 					persistent_data.default_directory = (line[default_directory_identifier.len()..]).to_string();
+				} else if line.starts_with(hide_dirs_identifier) {
+					match &line[hide_dirs_identifier.len()..] {
+						"true" => {
+							persistent_data.hide_directories_by_default = true;
+						},
+						"false" => {
+							persistent_data.hide_directories_by_default = false;
+						},
+						_ => {},
+					}
+				} else if line.starts_with(default_end_behavior_identifier) {
+					match &line[default_end_behavior_identifier.len()..] {
+						"Loop" => {
+							persistent_data.default_on_finish = LoopBehavior::Loop;
+						},
+						"Stop" => {
+							persistent_data.default_on_finish = LoopBehavior::Stop;
+						},
+						"Shuffle" => {
+							persistent_data.default_on_finish = LoopBehavior::Shuffle;
+						},
+						"Next" => {
+							persistent_data.default_on_finish = LoopBehavior::Next;
+						},
+						_ => {},
+					}
 				}
 			}
 			else if current_state == State::Playlists {
@@ -826,7 +859,8 @@ impl Default for MyApp {
 
 		Self {
 			first_frame_rendered: false,
-			loop_behavior: LoopBehavior::Stop,
+			loop_behavior: clone_loop_behavior(&persistent_data.default_on_finish),
+			default_on_finish: clone_loop_behavior(&persistent_data.default_on_finish),
 			browse_mode: LeftPanelMode::Files,
 			current_song_folder: persistent_data.default_directory.clone(),
 			song_speed: DEFAULT_SPEED,
@@ -854,13 +888,13 @@ impl Default for MyApp {
 
 			audio_message_channel: gui_thread_send,
 			audio_receive_channel: gui_thread_recieve,
+			hide_fp: persistent_data.hide_directories_by_default.clone(),
 			persistent_data: persistent_data,
 
 			central_panel_mode: start_mode,
 
 			installer_data: default_installer_data(),
 			installed_location: installed_location,
-			hide_fp: false,
 		}
 	}
 }
@@ -1403,11 +1437,28 @@ fn set_visuals(ctx: &egui::Context, theme: &ThemePref) {
 	}
 }
 
+fn default_on_finish_to_str(behavior: &LoopBehavior) -> &'static str {
+	match behavior {
+		LoopBehavior::Stop => {
+			"Stop"
+		},
+		LoopBehavior::Loop => {
+			"Loop"
+		},
+		LoopBehavior::Next => {
+			"Next"
+		},
+		LoopBehavior::Shuffle => {
+			"Shuffle"
+		},
+	}
+}
+
 fn write_internal_data(path: &str, persistent_data: &PersistentData) -> Result<(), Box<dyn std::error::Error>>{
 	use std::io::prelude::*;
 	let file = std::fs::File::create(path);
 	if let Ok(mut file) = file {
-		file.write_all("VERSION: 0".as_bytes())?;
+		file.write_all("VERSION: OPEN BETA 0".as_bytes())?;
 		file.write_all(persistent_data.data_file_version.as_bytes())?;
 		file.write_all("\n".as_bytes())?;
 		
@@ -1418,6 +1469,19 @@ fn write_internal_data(path: &str, persistent_data: &PersistentData) -> Result<(
 
 		file.write_all("Default Directory: ".as_bytes())?;
 		file.write_all(persistent_data.default_directory.as_bytes())?;
+		file.write_all("\n".as_bytes())?;
+
+		file.write_all("Default End Behavior: ".as_bytes())?;
+		file.write_all(default_on_finish_to_str(&persistent_data.default_on_finish).as_bytes())?;
+		file.write_all("\n".as_bytes())?;
+
+		file.write_all("Hide Directories: ".as_bytes())?;
+		let stow = if persistent_data.hide_directories_by_default {
+			"true"
+		} else {
+			"false"
+		};
+		file.write_all(stow.as_bytes())?;
 		file.write_all("\n".as_bytes())?;
 
 		file.write_all("PLAYLISTS\n".as_bytes())?;
@@ -1470,6 +1534,7 @@ enum PlaylistElementType {
 enum PlaylistEditMode {
 	AddRemove,
 	Reorder,
+	Remove,
 }
 
 /**
@@ -1489,6 +1554,16 @@ struct PlaylistEditData {
 	mode: PlaylistEditMode,
 	current_dragged_element: Option<usize>,
 	scroll_offset: f32,
+
+	removal_map: HashMap<String, PlaylistElementType>,
+}
+
+fn playlist_edit_data_to_str(mode: &PlaylistEditMode) -> &'static str {
+	return match mode {
+		PlaylistEditMode::AddRemove => {"Select songs"},
+		PlaylistEditMode::Reorder => {"Reorder songs"},
+		PlaylistEditMode::Remove => {"Remove songs"},
+	}
 }
 
 /**
@@ -1504,6 +1579,7 @@ fn init_playlist_edit_data(playlists: &Vec<Playlist>, index: usize) -> PlaylistE
 		mode: PlaylistEditMode::AddRemove,
 		current_dragged_element: None,
 		scroll_offset: 0.0,
+		removal_map: HashMap::<String, PlaylistElementType>::new(),
 	};
 	if let Some(playlist) = playlists.get(index) {
 		new_edit_data.playlist_name = playlist.name.to_string();
@@ -1600,11 +1676,13 @@ impl eframe::App for MyApp {
 						});
 					}
 					if !self.hide_fp {
-						if ui.button("Hide").clicked() {
+						let text = egui::RichText::new("Hide").line_height(Some(15.0));
+						if ui.button(text).clicked() {
 							self.hide_fp = true;
 						}
 					} else {
-						if ui.button("Show").clicked() {
+						let text = egui::RichText::new("Show").line_height(Some(15.0));
+						if ui.button(text).clicked() {
 							self.hide_fp = false;
 						}
 					}
@@ -1651,10 +1729,22 @@ impl eframe::App for MyApp {
 				}
 			});
 			ui.horizontal(|ui| {
-				if ui.button(if audio_data.is_paused {format!("Unpause")} else {format!("Pause")}).clicked() || ctx.input_mut(|i| i.consume_shortcut(&PAUSE)) {
+
+				let icon_size = 16.0;
+				let line_height = Some(icon_size + 3.0);
+				let pause_play_text = {
+					let raw_text = if audio_data.is_paused {format!("▶")} else {format!("⏸")};
+					egui::RichText::new(raw_text).line_height(line_height).size(icon_size)
+				};
+				if ui.button(pause_play_text).clicked() || ctx.input_mut(|i| i.consume_shortcut(&PAUSE)) {
 					send_audio_signal(&self.audio_message_channel, MessageToAudio::TogglePause);
 				}
-				if ui.button("Skip").clicked() {
+
+				let skip_text = {
+					let raw_text = "⏭";
+					egui::RichText::new(raw_text).line_height(line_height).size(icon_size)
+				};
+				if ui.button(skip_text).clicked() {
 					send_audio_signal(&self.audio_message_channel, MessageToAudio::SongEnd);
 				}
 
@@ -1662,7 +1752,22 @@ impl eframe::App for MyApp {
 
 				let secs = playback_pos / 1000;
 				let prev_vol = self.song_volume;
-				ui.label("Volume: ");
+				let volume_text = {
+					let raw_text = if self.song_volume > 0.5 {
+						"🔊"
+					}
+					else if self.song_volume > 0.25 {
+						"🔉"
+					}
+					else if self.song_volume > -0.195 {
+						"🔈"
+					}
+					else {
+						"🔇"
+					};
+					egui::RichText::new(raw_text).line_height(line_height).size(icon_size)
+				};
+				ui.label(volume_text);
 				ui.add_sized([120.0, ui.spacing().interact_size.y],
 					egui::Slider::new(&mut self.song_volume, -0.2..=1.0)
 					.show_value(false)
@@ -1733,12 +1838,10 @@ impl eframe::App for MyApp {
 			ui.vertical_centered(|ui| {
 				ui.heading("Songs");
 			});
-			// println!("Browse mode: {}", song_browse_mode_to_str(&self.browse_mode));
 			match self.browse_mode {
 				LeftPanelMode::Files => {
 					ui.horizontal(|ui| {
 						if let None = &self.edit_playlist_data {
-							let start = self.browse_mode.clone();
 							egui::ComboBox::from_label("")
 								.selected_text(song_browse_mode_to_str(&self.browse_mode))
 								.show_ui(ui, |ui| {
@@ -1751,6 +1854,24 @@ impl eframe::App for MyApp {
 						}
 						request_refresh = ui.button("Refresh").clicked() || ctx.input_mut(|i| i.consume_shortcut(&REFRESH));
 					});
+
+					if self.browse_mode == LeftPanelMode::Playlists {
+						if let Some(tree) = &self.playlist_tree {
+							let mut collection = Vec::<String>::new();
+							let mut new_current_location = None;
+							let mut i = 0;
+							for el in tree {
+								if let Some(name) = &el.song_name {
+									if new_current_location == None && *name == audio_data.song_name {
+										new_current_location = Some(i);
+									}
+									collection.push(name.to_string());
+									i += 1;
+								}
+							}
+							send_audio_signal(&self.audio_message_channel, MessageToAudio::SetSongCollection(collection, new_current_location));
+						}
+					}
 
 					ui.horizontal(|ui| {
 						let response = ui.add(egui::TextEdit::singleline(&mut self.search_text)
@@ -1774,6 +1895,7 @@ impl eframe::App for MyApp {
 							.hint_text("Artist..."))
 							.on_hover_text("Searches based on the artist name");
 					}
+					ui.add_space(5.0);
 
 					if let Some(active_directory) = active_directory {
 						/* Directory tree initialization in case it is null */
@@ -1820,7 +1942,6 @@ impl eframe::App for MyApp {
 				LeftPanelMode::Playlists => {
 					ui.horizontal(|ui| {
 						if let None = &self.edit_playlist_data {
-							let start = self.browse_mode.clone();
 							egui::ComboBox::from_label("")
 								.selected_text(song_browse_mode_to_str(&self.browse_mode))
 								.show_ui(ui, |ui| {
@@ -1833,6 +1954,22 @@ impl eframe::App for MyApp {
 						}
 						request_refresh = ui.button("Refresh").clicked() || ctx.input_mut(|i| i.consume_shortcut(&REFRESH));
 					});
+					if self.browse_mode == LeftPanelMode::Files {
+						if let Some(dirtree) = &self.directory_tree {
+							let mut collection = Vec::<String>::new();
+							let mut new_current_location: Option<usize> = None;
+
+							for el in dirtree {
+								if !el.is_dir {
+									if let None = new_current_location && el.name == audio_data.song_name {
+										new_current_location = Some(collection.len());
+									}
+									collection.push(el.name.clone());
+								}
+							}
+							send_audio_signal(&self.audio_message_channel, MessageToAudio::SetSongCollection(collection, new_current_location));
+						}
+					}
 
 					ui.horizontal(|ui| {
 						let response = ui.add(egui::TextEdit::singleline(&mut self.search_text)
@@ -1892,7 +2029,9 @@ impl eframe::App for MyApp {
 
 					if let Some(active_playlist_index) = self.active_playlist_index {
 						if let Some(playlist) = self.persistent_data.playlists.get(active_playlist_index) {
+							ui.add_space(1.0);
 							ui.label(egui::RichText::new(format!("{}", playlist.name)).strong());
+							ui.add_space(1.0);
 						} else {
 							ui.label(format!("Unknown playlist error"));
 						}
@@ -1945,73 +2084,6 @@ impl eframe::App for MyApp {
 					} else {
 						ui.label("No saved playlists found");
 					}
-
-					// if let Some(playlist_edit_data) = &mut self.edit_playlist_data {
-					// 	ui.add(egui::TextEdit::singleline(&mut playlist_edit_data.playlist_name).hint_text("Playlist name..."));
-					// 	let mut remove: bool = false;
-					// 	ui.horizontal(|ui| {
-					// 		if ui.button("Cancel").clicked() {
-					// 			remove = true;
-					// 		}
-					// 		/*
-					// 		* When in add mode: Only push to hashmap
-					// 		* When in reorder mode: First rebuild the vec from the hash map, then only do reordering.
-					// 		*/
-					// 		ui.add_space(2.5);
-					// 		if ui.button("Save").clicked() {
-					// 			if let Some(pl) = self.persistent_data.playlists.get_mut(playlist_edit_data.playlist_index) {
-					// 				pl.is_open = true;
-					// 				pl.name = playlist_edit_data.playlist_name.clone();
-
-					// 				pl.songs = rebuild_ordered_vec(&mut playlist_edit_data.edit_vec, &mut playlist_edit_data.edit_map);
-					// 			}
-					// 			remove = true;
-					// 		}
-					// 		let prev =  playlist_edit_data.mode.clone();
-					// 		egui::ComboBox::from_label(" ")/* Lmao */
-					// 			.selected_text(
-					// 				if playlist_edit_data.mode == PlaylistEditMode::AddRemove {
-					// 					"Add/remove songs".to_string()
-					// 				} else {
-					// 					"Reorder songs".to_string()
-					// 				}
-					// 			)
-					// 			.show_ui(ui, |ui| {
-					// 				ui.selectable_value(&mut playlist_edit_data.mode, PlaylistEditMode::AddRemove, "Add/remove songs");
-					// 				ui.selectable_value(&mut playlist_edit_data.mode, PlaylistEditMode::Reorder, "Reorder songs");
-					// 		});
-					// 		self.browse_mode = if playlist_edit_data.mode == PlaylistEditMode::AddRemove {LeftPanelMode::Files} else {LeftPanelMode::Playlists};
-					// 		if prev != playlist_edit_data.mode {
-					// 			match playlist_edit_data.mode {
-					// 				/* Shouldn't need to do anything here */
-					// 				PlaylistEditMode::AddRemove => {},
-					// 				PlaylistEditMode::Reorder => {
-					// 					playlist_edit_data.edit_vec = rebuild_ordered_vec(&mut playlist_edit_data.edit_vec, &mut playlist_edit_data.edit_map);
-					// 				},
-					// 			}
-					// 		}
-					// 	});
-					// 	ui.add_space(5.0);
-					// 	if remove {
-					// 		if let Some(pl) = self.persistent_data.playlists.get(playlist_edit_data.playlist_index) && pl.songs.len() == 0 {
-					// 			self.persistent_data.playlists.remove(playlist_edit_data.playlist_index);
-					// 		} else {
-					// 			self.active_playlist_index = Some(playlist_edit_data.playlist_index);
-					// 		}
-					// 		self.browse_mode = LeftPanelMode::Playlists;
-					// 		self.playlist_tree = None; // Force reload
-					// 		self.edit_playlist_data = None;
-
-					// 		if self.persistent_data.data_file_exists {
-					// 			let write_to = build_full_filepath(&self.installed_location, "internal_pinetree_data.txt");
-					// 			if let Ok(_) = write_internal_data(&write_to, &self.persistent_data) {
-									
-					// 			} else {
-					// 				println!("Error in saving");
-					// 			}
-					// 		}
-					// 	}
-					// } 
 				},
 				LeftPanelMode::DeletePlaylist => {
 					if let Some(playlist_index) = self.active_playlist_index {
@@ -2071,6 +2143,7 @@ impl eframe::App for MyApp {
 							.hint_text("Artist..."))
 							.on_hover_text("Searches based on the artist name");
 					}
+					ui.add_space(2.5);
 					if let Some(playlist_edit_data) = &mut self.edit_playlist_data {
 
 						ui.add(egui::TextEdit::singleline(&mut playlist_edit_data.playlist_name).hint_text("Playlist name..."));
@@ -2096,20 +2169,23 @@ impl eframe::App for MyApp {
 							let prev =  playlist_edit_data.mode.clone();
 							egui::ComboBox::from_label(" ")/* Lmao */
 								.selected_text(
-									if playlist_edit_data.mode == PlaylistEditMode::AddRemove {
-										"Add/remove songs".to_string()
-									} else {
-										"Reorder songs".to_string()
-									}
+									playlist_edit_data_to_str(&playlist_edit_data.mode)
 								)
 								.show_ui(ui, |ui| {
-									ui.selectable_value(&mut playlist_edit_data.mode, PlaylistEditMode::AddRemove, "Add/remove songs");
-									ui.selectable_value(&mut playlist_edit_data.mode, PlaylistEditMode::Reorder, "Reorder songs");
+									ui.selectable_value(&mut playlist_edit_data.mode, PlaylistEditMode::AddRemove, playlist_edit_data_to_str(&PlaylistEditMode::AddRemove));
+									ui.selectable_value(&mut playlist_edit_data.mode, PlaylistEditMode::Reorder, playlist_edit_data_to_str(&PlaylistEditMode::Reorder));
+									ui.selectable_value(&mut playlist_edit_data.mode, PlaylistEditMode::Remove, playlist_edit_data_to_str(&PlaylistEditMode::Remove));
 							});
-							if playlist_edit_data.mode == PlaylistEditMode::AddRemove {
-								self.browse_mode = LeftPanelMode::SelectSongs;
-							} else {
-								self.browse_mode = LeftPanelMode::ReorderSongs;
+							match playlist_edit_data.mode {
+								PlaylistEditMode::AddRemove => {
+									self.browse_mode = LeftPanelMode::SelectSongs;
+								},
+								PlaylistEditMode::Reorder => {
+									self.browse_mode = LeftPanelMode::ReorderSongs;
+								},
+								PlaylistEditMode::Remove => {
+									self.browse_mode = LeftPanelMode::RemoveSongs;
+								},
 							}
 							if prev != playlist_edit_data.mode {
 								match playlist_edit_data.mode {
@@ -2117,6 +2193,10 @@ impl eframe::App for MyApp {
 									PlaylistEditMode::AddRemove => {},
 									PlaylistEditMode::Reorder => {
 										playlist_edit_data.edit_vec = rebuild_ordered_vec(&mut playlist_edit_data.edit_vec, &mut playlist_edit_data.edit_map);
+									},
+									PlaylistEditMode::Remove => {
+										playlist_edit_data.edit_vec = rebuild_ordered_vec(&mut playlist_edit_data.edit_vec, &mut playlist_edit_data.edit_map);
+										// playlist_edit_data.removal_map = HashMap::<String, PlaylistElementType>::new();
 									},
 								}
 							}
@@ -2190,11 +2270,151 @@ impl eframe::App for MyApp {
 					}
 				},
 				LeftPanelMode::RemoveSongs => {
-					todo!();
+					ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
+					if let Some(playlist_edit_data) = &mut self.edit_playlist_data {
+						ui.add(egui::TextEdit::singleline(&mut playlist_edit_data.playlist_name).hint_text("Playlist name..."));
+						let mut remove: bool = false;
+						ui.horizontal(|ui| {
+							if ui.button("Cancel").clicked() {
+								remove = true;
+							}
+							/*
+							* When in add mode: Only push to hashmap
+							* When in reorder mode: First rebuild the vec from the hash map, then only do reordering.
+							*/
+							ui.add_space(2.5);
+							if ui.button("Save").clicked() {
+								if let Some(pl) = self.persistent_data.playlists.get_mut(playlist_edit_data.playlist_index) {
+									pl.is_open = true;
+									pl.name = playlist_edit_data.playlist_name.clone();
+
+									let mut new_vec: Vec<String> = Vec::<String>::new();
+									for song in &playlist_edit_data.edit_vec {
+										if !playlist_edit_data.removal_map.contains_key(song) {
+											playlist_edit_data.removal_map.remove(song);
+											new_vec.push(song.clone());
+										} else {
+											playlist_edit_data.edit_map.remove(song);
+										}
+									}
+									playlist_edit_data.edit_vec = new_vec;
+
+									pl.songs = rebuild_ordered_vec(&mut playlist_edit_data.edit_vec, &mut playlist_edit_data.edit_map);
+
+									playlist_edit_data.removal_map = HashMap::<String, PlaylistElementType>::new();
+								}
+								remove = true;
+							}
+							let prev =  playlist_edit_data.mode.clone();
+							egui::ComboBox::from_label(" ")/* Lmao */
+								.selected_text(
+									playlist_edit_data_to_str(&playlist_edit_data.mode)
+								)
+								.show_ui(ui, |ui| {
+									ui.selectable_value(&mut playlist_edit_data.mode, PlaylistEditMode::AddRemove, playlist_edit_data_to_str(&PlaylistEditMode::AddRemove));
+									ui.selectable_value(&mut playlist_edit_data.mode, PlaylistEditMode::Reorder, playlist_edit_data_to_str(&PlaylistEditMode::Reorder));
+									ui.selectable_value(&mut playlist_edit_data.mode, PlaylistEditMode::Remove, playlist_edit_data_to_str(&PlaylistEditMode::Remove));
+							});
+							match playlist_edit_data.mode {
+								PlaylistEditMode::AddRemove => {
+									self.browse_mode = LeftPanelMode::SelectSongs;
+								},
+								PlaylistEditMode::Reorder => {
+									self.browse_mode = LeftPanelMode::ReorderSongs;
+								},
+								PlaylistEditMode::Remove => {
+									self.browse_mode = LeftPanelMode::RemoveSongs;
+								},
+							}
+							if prev != playlist_edit_data.mode {
+								match playlist_edit_data.mode {
+									/* Shouldn't need to do anything here */
+									PlaylistEditMode::AddRemove => {
+										let mut new_vec: Vec<String> = Vec::<String>::new();
+										for song in &playlist_edit_data.edit_vec {
+											if !playlist_edit_data.removal_map.contains_key(song) {
+												playlist_edit_data.removal_map.remove(song);
+												new_vec.push(song.clone());
+											} else {
+												playlist_edit_data.edit_map.remove(song);
+											}
+										}
+										playlist_edit_data.edit_vec = new_vec;
+										playlist_edit_data.removal_map = HashMap::<String, PlaylistElementType>::new();
+									},
+									PlaylistEditMode::Reorder => {
+										let mut new_vec: Vec<String> = Vec::<String>::new();
+										for song in &playlist_edit_data.edit_vec {
+											if !playlist_edit_data.removal_map.contains_key(song) {
+												playlist_edit_data.removal_map.remove(song);
+												new_vec.push(song.clone());
+											} else {
+												playlist_edit_data.edit_map.remove(song);
+											}
+										}
+										playlist_edit_data.edit_vec = new_vec;
+										playlist_edit_data.removal_map = HashMap::<String, PlaylistElementType>::new();
+									},
+									PlaylistEditMode::Remove => {
+										
+									},
+								}
+							}
+						});
+
+						if remove {
+							if let Some(pl) = self.persistent_data.playlists.get(playlist_edit_data.playlist_index) && pl.songs.len() == 0 {
+								self.persistent_data.playlists.remove(playlist_edit_data.playlist_index);
+							} else {
+								self.active_playlist_index = Some(playlist_edit_data.playlist_index);
+							}
+							self.browse_mode = LeftPanelMode::Playlists;
+							self.playlist_tree = None; // Force reload
+							self.edit_playlist_data = None;
+
+							if self.persistent_data.data_file_exists {
+								let write_to = build_full_filepath(&self.installed_location, "internal_pinetree_data.txt");
+								if let Ok(_) = write_internal_data(&write_to, &self.persistent_data) {
+									
+								} else {
+									println!("Error in saving");
+								}
+							}
+						} else {
+							let row_count = playlist_edit_data.edit_vec.len();
+							egui::ScrollArea::vertical().show_rows(ui, 16.0, row_count, |ui, row_range| {
+								for row in row_range {
+									if let Some(song) = playlist_edit_data.edit_vec.get(row) {
+										ui.horizontal(|ui| {
+											let mut checked = !playlist_edit_data.removal_map.contains_key(song);
+											if ui.checkbox(&mut checked, "").clicked() {
+												if checked {
+													playlist_edit_data.removal_map.remove(song);
+												} else {
+													playlist_edit_data.removal_map.insert(song.clone(), PlaylistElementType::Song);
+												}
+											}
+											if checked {
+												ui.label(extract_file_name(song));
+											} else {
+												ui.disable();
+												ui.label(extract_file_name(song));
+											}
+										});
+									}
+								}
+							});
+						}
+
+
+					} else {
+						unreachable!();
+					}
 				},
 				LeftPanelMode::ReorderSongs => {
 					if let Some(playlist_edit_data) = &mut self.edit_playlist_data {
 						let mut remove = false;
+						ui.add(egui::TextEdit::singleline(&mut playlist_edit_data.playlist_name).hint_text("Playlist name..."));
 						ui.horizontal(|ui| {
 							if ui.button("Cancel").clicked() {
 								remove = true;
@@ -2216,20 +2436,23 @@ impl eframe::App for MyApp {
 							let prev =  playlist_edit_data.mode.clone();
 							egui::ComboBox::from_label(" ")/* Lmao */
 								.selected_text(
-									if playlist_edit_data.mode == PlaylistEditMode::AddRemove {
-										"Add/remove songs".to_string()
-									} else {
-										"Reorder songs".to_string()
-									}
+									playlist_edit_data_to_str(&playlist_edit_data.mode)
 								)
 								.show_ui(ui, |ui| {
-									ui.selectable_value(&mut playlist_edit_data.mode, PlaylistEditMode::AddRemove, "Add/remove songs");
-									ui.selectable_value(&mut playlist_edit_data.mode, PlaylistEditMode::Reorder, "Reorder songs");
+									ui.selectable_value(&mut playlist_edit_data.mode, PlaylistEditMode::AddRemove, playlist_edit_data_to_str(&PlaylistEditMode::AddRemove));
+									ui.selectable_value(&mut playlist_edit_data.mode, PlaylistEditMode::Reorder, playlist_edit_data_to_str(&PlaylistEditMode::Reorder));
+									ui.selectable_value(&mut playlist_edit_data.mode, PlaylistEditMode::Remove, playlist_edit_data_to_str(&PlaylistEditMode::Remove));
 							});
-							if playlist_edit_data.mode == PlaylistEditMode::AddRemove {
-								self.browse_mode = LeftPanelMode::SelectSongs;
-							} else {
-								self.browse_mode = LeftPanelMode::ReorderSongs;
+							match playlist_edit_data.mode {
+								PlaylistEditMode::AddRemove => {
+									self.browse_mode = LeftPanelMode::SelectSongs;
+								},
+								PlaylistEditMode::Reorder => {
+									self.browse_mode = LeftPanelMode::ReorderSongs;
+								},
+								PlaylistEditMode::Remove => {
+									self.browse_mode = LeftPanelMode::RemoveSongs;
+								},
 							}
 							if prev != playlist_edit_data.mode {
 								match playlist_edit_data.mode {
@@ -2238,10 +2461,13 @@ impl eframe::App for MyApp {
 									PlaylistEditMode::Reorder => {
 										playlist_edit_data.edit_vec = rebuild_ordered_vec(&mut playlist_edit_data.edit_vec, &mut playlist_edit_data.edit_map);
 									},
+									PlaylistEditMode::Remove => {
+										playlist_edit_data.edit_vec = rebuild_ordered_vec(&mut playlist_edit_data.edit_vec, &mut playlist_edit_data.edit_map);
+
+									},
 								}
 							}
 						});
-						ui.add(egui::TextEdit::singleline(&mut playlist_edit_data.playlist_name).hint_text("Playlist name..."));
 						ui.add_space(5.0);
 						file_action = render_playlist_reordering(ui, &audio_data.song_name, playlist_edit_data);
 
@@ -2270,341 +2496,6 @@ impl eframe::App for MyApp {
 				},
 			}
 		});
-
-			// ui.vertical_centered(|ui| {
-			// 	ui.heading("Songs");
-			// 	match self.browse_mode {
-			// 		LeftPanelMode::Files => {
-
-			// 		},
-			// 		LeftPanelMode::Playlists => {
-
-			// 		},
-			// 		LeftPanelMode::Delete => {
-
-			// 		},
-			// 	}
-		// 		if self.browse_mode != LeftPanelMode::Delete {
-		// 			ui.horizontal(|ui| {
-		// 				if let None = &self.edit_playlist_data {
-		// 					let start = self.browse_mode.clone();
-		// 					egui::ComboBox::from_label("")
-		// 						.selected_text(song_browse_mode_to_str(&self.browse_mode))
-		// 						.show_ui(ui, |ui| {
-		// 							ui.selectable_value(&mut self.browse_mode, LeftPanelMode::Files, "Files");
-		// 							ui.selectable_value(&mut self.browse_mode, LeftPanelMode::Playlists, "Playlists");
-		// 						}
-		// 					);
-		// 					if start != self.browse_mode {
-		// 						match self.browse_mode {
-		// 							LeftPanelMode::Delete => {},
-		// 							LeftPanelMode::Files => {
-		// 								if let Some(dirtree) = &self.directory_tree {
-		// 									let mut collection = Vec::<String>::new();
-		// 									let mut new_current_location: Option<usize> = None;
-
-		// 									for el in dirtree {
-		// 										if !el.is_dir {
-		// 											if let None = new_current_location && el.name == audio_data.song_name {
-		// 												new_current_location = Some(collection.len());
-		// 											}
-		// 											collection.push(el.name.clone());
-		// 										}
-		// 									}
-		// 									send_audio_signal(&self.audio_message_channel, MessageToAudio::SetSongCollection(collection, new_current_location));
-		// 								}
-		// 							},
-		// 							LeftPanelMode::Playlists => {
-		// 								if let Some(tree) = &self.playlist_tree {
-		// 									let mut collection = Vec::<String>::new();
-		// 									let mut new_current_location = None;
-		// 									let mut i = 0;
-		// 									for el in tree {
-		// 										if let Some(name) = &el.song_name {
-		// 											if new_current_location == None && *name == audio_data.song_name {
-		// 												new_current_location = Some(i);
-		// 											}
-		// 											collection.push(name.to_string());
-		// 											i += 1;
-		// 										}
-		// 									}
-		// 									send_audio_signal(&self.audio_message_channel, MessageToAudio::SetSongCollection(collection, new_current_location));
-		// 								}
-		// 							},
-		// 						}
-		// 					}
-		// 				}
-		// 				if ui.button("Advanced").clicked() {
-		// 					self.advanced_search_active = !self.advanced_search_active;
-		// 				}
-		// 				request_refresh = ui.button("Refresh").clicked() || ctx.input_mut(|i| i.consume_shortcut(&REFRESH));
-		// 			});
-		// 		}
-		// 	});
-		// 	if self.browse_mode != LeftPanelMode::Delete {
-		// 		ui.horizontal(|ui| {
-		// 			let response = ui.add(egui::TextEdit::singleline(&mut self.search_text)
-		// 				.hint_text("Search..."))
-		// 				.on_hover_text("Searches based on the file name");
-	
-		// 			if ctx.input(|i| i.key_pressed(egui::Key::F) && i.modifiers.ctrl) {
-		// 				response.request_focus();
-		// 			}
-	
-		// 			if self.search_text == "" {
-		// 				self.searched_directory_tree = None;
-		// 				self.searched_playlist_tree = None;
-		// 			}
-		// 		});
-		// 		if self.advanced_search_active {
-		// 			ui.add(egui::TextEdit::singleline(&mut self.genre_search_text)
-		// 				.hint_text("Genre..."))
-		// 				.on_hover_text("Searches based on the genre name");
-		// 			ui.add(egui::TextEdit::singleline(&mut self.artist_search_text)
-		// 				.hint_text("Artist..."))
-		// 				.on_hover_text("Searches based on the artist name");
-		// 		}
-		// 	}
-		// 	if self.browse_mode == LeftPanelMode::Files {
-		// 		ui.add_space(5.0);
-		// 	}
-
-		// 	if let Some(playlist_edit_data) = &mut self.edit_playlist_data {
-		// 		ui.add(egui::TextEdit::singleline(&mut playlist_edit_data.playlist_name).hint_text("Playlist name..."));
-		// 		let mut remove: bool = false;
-		// 		ui.horizontal(|ui| {
-		// 			if ui.button("Cancel").clicked() {
-		// 				remove = true;
-		// 			}
-		// 			/*
-		// 			* When in add mode: Only push to hashmap
-		// 			* When in reorder mode: First rebuild the vec from the hash map, then only do reordering.
-		// 			 */
-		// 			ui.add_space(2.5);
-		// 			if ui.button("Save").clicked() {
-		// 				if let Some(pl) = self.persistent_data.playlists.get_mut(playlist_edit_data.playlist_index) {
-		// 					pl.is_open = true;
-		// 					pl.name = playlist_edit_data.playlist_name.clone();
-
-		// 					pl.songs = rebuild_ordered_vec(&mut playlist_edit_data.edit_vec, &mut playlist_edit_data.edit_map);
-		// 				}
-		// 				remove = true;
-		// 			}
-		// 			let prev =  playlist_edit_data.mode.clone();
-		// 			egui::ComboBox::from_label(" ")/* Lmao */
-		// 				.selected_text(
-		// 					if playlist_edit_data.mode == PlaylistEditMode::AddRemove {
-		// 						"Add/remove songs".to_string()
-		// 					} else {
-		// 						"Reorder songs".to_string()
-		// 					}
-		// 				)
-		// 				.show_ui(ui, |ui| {
-		// 					ui.selectable_value(&mut playlist_edit_data.mode, PlaylistEditMode::AddRemove, "Add/remove songs");
-		// 					ui.selectable_value(&mut playlist_edit_data.mode, PlaylistEditMode::Reorder, "Reorder songs");
-		// 			});
-		// 			self.browse_mode = if playlist_edit_data.mode == PlaylistEditMode::AddRemove {LeftPanelMode::Files} else {LeftPanelMode::Playlists};
-		// 			if prev != playlist_edit_data.mode {
-		// 				match playlist_edit_data.mode {
-		// 					/* Shouldn't need to do anything here */
-		// 					PlaylistEditMode::AddRemove => {},
-		// 					PlaylistEditMode::Reorder => {
-		// 						playlist_edit_data.edit_vec = rebuild_ordered_vec(&mut playlist_edit_data.edit_vec, &mut playlist_edit_data.edit_map);
-		// 					},
-		// 				}
-		// 			}
-		// 		});
-		// 		ui.add_space(5.0);
-		// 		if remove {
-		// 			if let Some(pl) = self.persistent_data.playlists.get(playlist_edit_data.playlist_index) && pl.songs.len() == 0 {
-		// 				self.persistent_data.playlists.remove(playlist_edit_data.playlist_index);
-		// 			} else {
-		// 				self.active_playlist_index = Some(playlist_edit_data.playlist_index);
-		// 			}
-		// 			self.browse_mode = LeftPanelMode::Playlists;
-		// 			self.playlist_tree = None; // Force reload
-		// 			self.edit_playlist_data = None;
-
-		// 			if self.persistent_data.data_file_exists {
-		// 				let write_to = build_full_filepath(&self.installed_location, "internal_pinetree_data.txt");
-		// 				if let Ok(_) = write_internal_data(&write_to, &self.persistent_data) {
-							
-		// 				} else {
-		// 					println!("Error in saving");
-		// 				}
-		// 			}
-		// 		}
-		// 	} 
-		// 	if self.browse_mode == LeftPanelMode::Files {
-		// 		if let Some(active_directory) = active_directory {
-		// 			/* Directory tree initialization in case it is null */
-		// 			if let None = self.directory_tree {
-		// 				let mut new_tree = Vec::<DirTreeElement>::new();
-		// 				let mut collection = Vec::<String>::new();
-		// 				get_dir_tree_elements(&mut new_tree, &active_directory.filepath_identifier, &self.directory_map, 0);
-		// 				let mut new_current_location: Option<usize> = None;
-
-		// 				for el in &new_tree {
-		// 					if !el.is_dir {
-		// 						if let None = new_current_location && el.name == audio_data.song_name {
-		// 							new_current_location = Some(collection.len());
-		// 						}
-		// 						collection.push(el.name.clone());
-		// 					}
-		// 				}
-		// 				send_audio_signal(&self.audio_message_channel, MessageToAudio::SetSongCollection(collection, new_current_location));
-		// 				self.directory_tree = Some(new_tree);
-		// 			}
-		// 			let searching = self.search_text != "";
-					
-		// 			if let Some(directory_tree_elements) = &self.directory_tree {
-		// 				if searching && self.active_search_text != self.search_text {
-		// 					self.active_search_text = self.search_text.clone();
-		// 					let compare_to = self.active_search_text.to_lowercase();
-		// 					self.searched_directory_tree = {
-		// 						let mut vec = Vec::<usize>::new();
-		// 						for i in 0..directory_tree_elements.len() {
-		// 							if let Some(element) = directory_tree_elements.get(i)
-		// 							&& element.name.to_lowercase().contains(&compare_to) {
-		// 								vec.push(i);
-		// 							}
-		// 						}
-		// 						Some(vec)
-		// 					};
-		// 				}
-		// 			}
-		// 			file_action = render_directory_elements(ui, &self.directory_tree, &self.searched_directory_tree, &audio_data.song_name, &self.edit_playlist_data);
-		// 		} else {
-		// 			ui.label("Error: Directory does not exist");
-		// 		}
-		// 	}
-		// 	else if self.browse_mode == LeftPanelMode::Delete {
-		// 		if let Some(playlist_index) = self.active_playlist_index {
-		// 			ui.vertical_centered(|ui| {
-		// 				if let Some(playlist) = self.persistent_data.playlists.get(playlist_index) {
-		// 					ui.label(format!("Are you sure you want to delete the playlist {}?", playlist.name));
-		// 				}
-		// 				if ui.button("Yes").clicked() {
-		// 					self.persistent_data.playlists.remove(playlist_index);
-		// 					self.active_playlist_index = None;
-		// 					request_refresh = true;
-		// 					self.browse_mode = LeftPanelMode::Playlists;
-							
-		// 					let write_to = build_full_filepath(&self.installed_location, "internal_pinetree_data.txt");
-		// 					if let Ok(_) = write_internal_data(&write_to, &self.persistent_data) {
-								
-		// 					} else {
-		// 						println!("Error in saving");
-		// 					}
-		// 				}
-		// 				if ui.button("No").clicked() {
-		// 					self.browse_mode = LeftPanelMode::Playlists;
-		// 				}
-		// 			});
-		// 		}
-		// 		else {
-		// 			self.browse_mode = LeftPanelMode::Playlists;
-		// 		}
-		// 	}
-		// 	else {
-		// 		if let None = self.active_playlist_index {
-		// 			if ui.button("New").clicked() {
-		// 				self.persistent_data.playlists.push(Playlist {
-		// 					is_open: false,
-		// 					name: "New playlist".to_string(),
-		// 					songs: Vec::<String>::new(),
-		// 				});
-	
-		// 				self.browse_mode = LeftPanelMode::Files;
-	
-		// 				self.edit_playlist_data = Some(init_playlist_edit_data(&self.persistent_data.playlists, self.persistent_data.playlists.len() - 1));
-		// 			}
-		// 		}
-		// 		let song_depth = if let Some(_) = self.active_playlist_index {0} else {1};
-		// 		if let None = self.playlist_tree {
-		// 			if let Some(active_playlist_index) = self.active_playlist_index {
-		// 				let mut tree = Vec::<PlaylistTreeElement>::new();
-		// 				let mut collection = Vec::<String>::new();
-		// 				let mut new_current_location: Option<usize> = None;
-		// 				let playlists = &self.persistent_data.playlists;
-		// 				if let Some(playlist) = playlists.get(active_playlist_index) {
-		// 					for song in &playlist.songs {
-		// 						tree.push(PlaylistTreeElement {
-		// 							song_name: Some(song.clone()),
-		// 							playlist_position: 0,
-		// 						});
-		// 						if let None = new_current_location && *song == audio_data.song_name {
-		// 							new_current_location = Some(collection.len());
-		// 						}
-		// 						collection.push(song.to_string());
-		// 					}
-		// 					self.playlist_tree = Some(tree);
-		// 					send_audio_signal(&self.audio_message_channel, MessageToAudio::SetSongCollection(collection, new_current_location));
-		// 				} else {
-		// 					ui.label(format!("Unknown playlist error"));
-		// 					self.playlist_tree = None;
-		// 				}
-		// 			} else {
-		// 				self.playlist_tree = Some(build_playlist_tree(&self.persistent_data.playlists));
-		// 			}
-		// 		}
-
-		// 		if let Some(active_playlist_index) = self.active_playlist_index {
-		// 			if let Some(playlist) = self.persistent_data.playlists.get(active_playlist_index) {
-		// 				ui.label(egui::RichText::new(format!("{}", playlist.name)).strong());
-		// 			} else {
-		// 				ui.label(format!("Unknown playlist error"));
-		// 			}
-		// 			ui.add_space(5.0);
-		// 			ui.horizontal(|ui| {
-		// 				if ui.button("Go back").clicked() {
-		// 					request_refresh = true;
-		// 				}
-		// 				if ui.button("Edit songs").clicked() {
-		// 					request_refresh = true;
-		// 					self.browse_mode = LeftPanelMode::Files;
-		// 					self.edit_playlist_data = Some(init_playlist_edit_data(&self.persistent_data.playlists, active_playlist_index));
-		// 				}
-		// 				if ui.button("Delete").clicked() {
-		// 					self.browse_mode = LeftPanelMode::Delete;
-		// 				}
-		// 			});
-		// 			ui.add_space(5.0);
-		// 		}
-		// 		if let Some(playlist_tree) = &self.playlist_tree && playlist_tree.len() > 0 {
-		// 			let searching = self.search_text != "";
-		// 			if searching {
-		// 				if self.search_text != self.active_search_text_playlists {
-		// 					self.active_search_text_playlists = self.search_text.clone();
-		// 					self.searched_playlist_tree = None;
-		// 				}
-		// 				let compare_to = self.active_search_text_playlists.to_lowercase();
-		// 				if let None = self.searched_playlist_tree {
-		// 					let mut tmp_vec = Vec::<usize>::new();
-		// 					let mut position = 0;
-		// 					for element in playlist_tree {
-		// 						if let Some(name) = &element.song_name && name.to_lowercase().contains(&compare_to) {
-		// 							tmp_vec.push(position);
-		// 						} else if let Some(playlist) = self.persistent_data.playlists.get(element.playlist_position)
-		// 						&& playlist.name.to_lowercase().contains(&compare_to) {
-		// 							tmp_vec.push(position);
-		// 						}
-		// 						position += 1;
-		// 					}
-		// 					self.searched_playlist_tree = Some(tmp_vec);
-		// 				}
-		// 			}
-		// 			if let Some(edit_playlist_data) = &mut self.edit_playlist_data {
-		// 				file_action = render_playlist_reordering(ui, &audio_data.song_name, edit_playlist_data);
-		// 			} else {
-		// 				file_action = render_playlist_elements(ui, &self.playlist_tree, &self.searched_playlist_tree, &self.persistent_data.playlists, song_depth, &audio_data.song_name);
-		// 			}
-		// 		} else {
-		// 			ui.label("No saved playlists found");
-		// 		}
-		// 	}
-
-		// });
 
 		match file_action {
 			FileActions::None => {},
@@ -2799,6 +2690,18 @@ impl eframe::App for MyApp {
 						}
 					});
 					ui.horizontal(|ui| {
+						ui.label("Default on-finish:");
+						egui::ComboBox::from_label("  ")
+							.selected_text(loop_behavior_to_str(&self.persistent_data.default_on_finish))
+							.show_ui(ui, |ui| {
+								ui.selectable_value(&mut self.persistent_data.default_on_finish, LoopBehavior::Stop, "Stop");
+								ui.selectable_value(&mut self.persistent_data.default_on_finish, LoopBehavior::Loop, "Loop");
+								ui.selectable_value(&mut self.persistent_data.default_on_finish, LoopBehavior::Shuffle, "Shuffle");
+								ui.selectable_value(&mut self.persistent_data.default_on_finish, LoopBehavior::Next, "Next");
+							}
+						);
+					});
+					ui.horizontal(|ui| {
 						if !self.hide_fp {
 							ui.label("Default Folder: ");
 							ui.text_edit_singleline(&mut self.persistent_data.default_directory);
@@ -2810,6 +2713,10 @@ impl eframe::App for MyApp {
 								ui.text_edit_singleline(&mut hidden);
 							});
 						}
+					});
+					ui.horizontal(|ui| {
+						ui.label("Hide File Paths by Default: ");
+						ui.checkbox(&mut self.persistent_data.hide_directories_by_default, "");
 					});
 					if ui.button("Save").clicked() {
 						/* TODO: Error handling */
