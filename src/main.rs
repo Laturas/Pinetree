@@ -201,12 +201,35 @@ mod windows_folders {
 	// }
 }
 
+#[cfg(target_family = "unix")]
+mod unix_folders {
+	use std::env;
+
+	/**
+	* Returns ~/
+	*/
+	pub fn home() -> Option<String> {
+		let mut r_str = None;
+		if let Some(home) = env::home_dir() && let Some(path_string) = home.as_os_str().to_str() {
+			r_str = Some(path_string.to_string());
+		}
+		return r_str;
+	}
+}
+
 fn default_install_path() -> String {
 	#[cfg(target_os = "windows")] {
 		let appdata = windows_folders::roaming_app_data();
 		if let Some(appdata_folder) = appdata
 		&& let Some(path_string) = appdata_folder.as_os_str().to_str() {
 			return path_string.to_string();
+		}
+	}
+	#[cfg(target_os = "linux")] {
+		let home = unix_folders::home();
+		if let Some(home_folder) = home {
+			let local_share = build_full_filepath(&home_folder, ".local/share");
+			return local_share.to_string();
 		}
 	}
 	"".to_string()
@@ -217,6 +240,13 @@ fn default_song_path() -> String {
 		if let Some(appdata_folder) = appdata
 		&& let Some(path_string) = appdata_folder.as_os_str().to_str() {
 			return path_string.to_string();
+		}
+	}
+	#[cfg(target_os = "linux")] {
+		let home = unix_folders::home();
+		if let Some(home_folder) = home {
+			let local_share = build_full_filepath(&home_folder, "Music");
+			return local_share.to_string();
 		}
 	}
 	"".to_string()
@@ -1519,6 +1549,8 @@ fn run_install(install_data: &InstallerData, persistent_data: &PersistentData) -
 
 		return if let Ok(_) = write_internal_data(&target_data_path, &persistent_data) {true} else {false};
 	} else {
+		println!("Le fail");
+		println!("{:?}", install_location_result);
 		return false;
 	}
 }

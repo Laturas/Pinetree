@@ -8,7 +8,6 @@ eframe = "0.29.1"
 egui = "0.29.1"
 mp3-duration = "0.1.10"
 rodio = { path = "./modded_rodio" }
-shortcuts-rs = "1.1.1"
 
 [target.'cfg(windows)'.build-dependencies]
 winres = "0.1"
