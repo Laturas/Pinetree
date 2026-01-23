@@ -307,7 +307,11 @@ struct MyApp {
 	persistent_data: PersistentData,
 	installer_data: InstallerData,
 	installed_location: String,
+	installer_error: Option<String>,
+
 	hide_fp: bool,
+
+	save_err: SaveError,
 }
 
 #[derive(Clone)]
@@ -528,6 +532,7 @@ fn audio_thread_loop(
 	let mut saved_timestamp: Option<time::SystemTime> = None;
 	let mut current_timestamp: u128 = 0;
 	let mut song_play_err = None;
+	let mut seeking = false;
 	loop {
 		while let Some(data) = data_vec.pop() {
 			match data {
@@ -587,9 +592,21 @@ fn audio_thread_loop(
 					send_cvar.notify_one();
 				},
 				MessageToAudio::Seek(position) => {
+					seeking = true;
 					if !audio_thread_data.sink.empty() {
-						let _ = audio_thread_data.sink.try_seek(std::time::Duration::from_millis((position as f32 / audio_thread_data.speed) as u64));
+						let seek_time_ms: u64 = (position as f32 / audio_thread_data.speed) as u64;
+						if seek_time_ms.saturating_sub(song_length as u64) < 5 {
+							audio_thread_data.sink.pause();
+						}
+						let _ = audio_thread_data.sink.try_seek(std::time::Duration::from_millis(seek_time_ms));
 						current_timestamp = (position * 1000) as u128;
+						saved_timestamp = if audio_thread_data.sink.is_paused() {None} else {Some(time::SystemTime::now())};
+					}
+				},
+				MessageToAudio::SeekStop => {
+					if seeking && !audio_thread_data.sink.empty() {
+						audio_thread_data.sink.play();
+						seeking = false;
 						saved_timestamp = if audio_thread_data.sink.is_paused() {None} else {Some(time::SystemTime::now())};
 					}
 				},
@@ -729,6 +746,7 @@ enum MessageToAudio {
 	UpdateSpeed(f32),
 	RequestRodioData,
 	Seek(usize),
+	SeekStop,
 	TogglePause,
 	SongEnd,
 	/**
@@ -925,6 +943,10 @@ impl Default for MyApp {
 
 			installer_data: default_installer_data(),
 			installed_location: installed_location,
+
+			installer_error: None,
+
+			save_err: SaveError::None,
 		}
 	}
 }
@@ -1436,17 +1458,22 @@ fn render_playlist_reordering(ui: &mut egui::Ui,
 fn add_font(ctx: &egui::Context) {
 	let mut fonts = egui::FontDefinitions::default();
 
-	fonts.font_data.insert("fallback".to_owned(),
-	egui::FontData::from_static(include_bytes!(
-			"./../fonts/MPLUS1p-Regular.ttf"
-		))
+	fonts.font_data.insert("fallback_japanese".to_owned(),
+		egui::FontData::from_static(include_bytes!("./../fonts/MPLUS1p-Regular.ttf"))
+	);
+	fonts.font_data.insert("fallback_korean".to_owned(),
+		egui::FontData::from_static(include_bytes!("./../fonts/Paperlogy-4Regular.ttf"))
 	);
 
-	fonts
-        .families
-        .entry(egui::FontFamily::Proportional)
-        .or_default()
-        .push("fallback".to_owned());
+	fonts.families
+		.entry(egui::FontFamily::Proportional)
+		.or_default()
+		.push("fallback_japanese".to_owned());
+	fonts.families
+		.entry(egui::FontFamily::Proportional)
+		.or_default()
+		.push("fallback_korean".to_owned());
+
     ctx.set_fonts(fonts);
 }
 
@@ -1529,7 +1556,10 @@ fn write_internal_data(path: &str, persistent_data: &PersistentData) -> Result<(
 	return Ok(());
 }
 
-fn run_install(install_data: &InstallerData, persistent_data: &PersistentData) -> bool {
+/**
+* Returns None on success. Otherwise, returns a string with the relevant error.
+*/
+fn run_install(install_data: &InstallerData, persistent_data: &PersistentData) -> Option<String> {
 	let fp = build_full_filepath(&install_data.install_path, "Pinetree");
 
 	let install_location_result = std::fs::create_dir(fp);
@@ -1537,21 +1567,27 @@ fn run_install(install_data: &InstallerData, persistent_data: &PersistentData) -
 		let fp_exe = build_full_filepath("Pinetree", "pinetree.exe");
 		let target_exe_path = build_full_filepath(&install_data.install_path, &fp_exe);
 
-		if let Ok(current_exe) = std::env::current_exe()
-		&& let Ok(_) = std::fs::copy(&current_exe, &target_exe_path) {
-			// Nothing: Success
+		if let Ok(current_exe) = std::env::current_exe() {
+			if let Ok(_) = std::fs::copy(&current_exe, &target_exe_path) {
+				// Nothing: Success
+				// Continue as normal
+			} else {
+				return Some(format!("Failed to write the executable to the install directory (genuinely how did you even trigger this)"));
+			}
 		} else {
-			return false
+			return Some(format!("Failed to retrieve the current executable (genuinely how did you even trigger this)"));
 		}
 
 		let fp_data = build_full_filepath("Pinetree", "internal_pinetree_data.txt");
 		let target_data_path = build_full_filepath(&install_data.install_path, &fp_data);
 
-		return if let Ok(_) = write_internal_data(&target_data_path, &persistent_data) {true} else {false};
+		if let Ok(_) = write_internal_data(&target_data_path, &persistent_data) {
+			return None; // Success
+		} else {
+			return Some(format!("Failed to write persistent data file (unknown error)"));
+		}
 	} else {
-		println!("Le fail");
-		println!("{:?}", install_location_result);
-		return false;
+		return Some(format!("Failed to write to directory (insufficient permissions?)"));
 	}
 }
 
@@ -1654,6 +1690,12 @@ fn rebuild_ordered_vec(existing_ordered_vec: &mut Vec<String>, existence_map: &m
 	}
 
 	return new_ordered_vec;
+}
+
+enum SaveError {
+	None,
+	Success,
+	Error(String),
 }
 
 impl eframe::App for MyApp {
@@ -1822,6 +1864,9 @@ impl eframe::App for MyApp {
 
 				if seeker.dragged() {
 					send_audio_signal(&self.audio_message_channel, MessageToAudio::Seek(playback_pos));
+				}
+				if seeker.drag_released() {
+					send_audio_signal(&self.audio_message_channel, MessageToAudio::SeekStop);
 				}
 				if ctx.input(|i| i.key_pressed(egui::Key::ArrowRight)) {
 					let mut focused = false;
@@ -2247,7 +2292,7 @@ impl eframe::App for MyApp {
 							if self.persistent_data.data_file_exists {
 								let write_to = build_full_filepath(&self.installed_location, "internal_pinetree_data.txt");
 								if let Ok(_) = write_internal_data(&write_to, &self.persistent_data) {
-									
+									/* TODO */
 								} else {
 									println!("Error in saving");
 								}
@@ -2406,6 +2451,7 @@ impl eframe::App for MyApp {
 
 							if self.persistent_data.data_file_exists {
 								let write_to = build_full_filepath(&self.installed_location, "internal_pinetree_data.txt");
+								/* TODO: Display error message on failure */
 								if let Ok(_) = write_internal_data(&write_to, &self.persistent_data) {
 									
 								} else {
@@ -2754,10 +2800,34 @@ impl eframe::App for MyApp {
 						/* TODO: Error handling */
 						let write_to = build_full_filepath(&self.installed_location, "internal_pinetree_data.txt");
 						if let Ok(_) = write_internal_data(&write_to, &self.persistent_data) {
-							
+							self.save_err = SaveError::Success;
 						} else {
-							println!("Error in saving");
+							self.save_err = SaveError::Error(format!("Error: Failed to save internal data"))
 						}
+					}
+					match &mut self.save_err {
+						SaveError::None => {},
+						SaveError::Success => {
+							ui.horizontal(|ui| {
+								if ui.button("X").clicked() {
+									self.save_err = SaveError::None;
+								}
+								ui.label("Successfully saved settings");
+							});
+						},
+						SaveError::Error(string) => {
+							let mut clear = false;
+							ui.horizontal(|ui| {
+								if ui.button(egui::RichText::new("X").color(egui::Color32::RED)).clicked() {
+									clear = true;
+								} else {
+									ui.label(egui::RichText::new(string.clone()).color(egui::Color32::RED));
+								}
+							});
+							if clear {
+								self.save_err = SaveError::None;
+							}
+						},
 					}
 				},
 				CentralPanelMode::Installer => {
@@ -2784,9 +2854,11 @@ impl eframe::App for MyApp {
 						if ui.button(egui::RichText::new("Install").size(16.0).strong()).clicked() {
 							self.persistent_data.default_directory = self.installer_data.default_song_folder.clone();
 							/* TODO: Add proper error display */
-							let install_success = run_install(&self.installer_data, &self.persistent_data);
+							let install_error = run_install(&self.installer_data, &self.persistent_data);
 
-							if install_success {
+							if let Some(install_error) = install_error {
+								self.installer_error = Some(install_error);
+							} else {
 								self.central_panel_mode = CentralPanelMode::InstallationSuccess;
 								self.installed_location = self.installer_data.install_path.clone();
 								self.active_directory_filepath = self.installer_data.default_song_folder.clone();
@@ -2797,6 +2869,16 @@ impl eframe::App for MyApp {
 					});
 
 					ui.add_space(20.0);
+					if let Some(err) = &self.installer_error {
+						let err_text = egui::RichText::new(err).color(egui::Color32::RED);
+						ui.horizontal(|ui| {
+							if ui.button(egui::RichText::new("X").color(egui::Color32::RED)).clicked() {
+								self.installer_error = None;
+							} else {
+								ui.label(err_text);
+							}
+						});
+					}
 
 					ui.label("Additional note: Creating shortcuts/taskbar icons automatically is unfortunately not supported because it would mean requiring admin permissions on Windows");
 				},
