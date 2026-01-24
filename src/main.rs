@@ -533,6 +533,7 @@ fn audio_thread_loop(
 	let mut current_timestamp: u128 = 0;
 	let mut song_play_err = None;
 	let mut seeking = false;
+	let mut paused_from_seeking = false;
 	loop {
 		while let Some(data) = data_vec.pop() {
 			match data {
@@ -595,8 +596,16 @@ fn audio_thread_loop(
 					seeking = true;
 					if !audio_thread_data.sink.empty() {
 						let seek_time_ms: u64 = (position as f32 / audio_thread_data.speed) as u64;
-						if seek_time_ms.saturating_sub(song_length as u64) < 5 {
+						if (song_length as u64).saturating_sub(seek_time_ms) < 1000 {
+							if !audio_thread_data.sink.is_paused() && !paused_from_seeking {
+								paused_from_seeking = true;
+							}
 							audio_thread_data.sink.pause();
+						} else {
+							if audio_thread_data.sink.is_paused() && paused_from_seeking {
+								audio_thread_data.sink.play();
+								paused_from_seeking = false;
+							}
 						}
 						let _ = audio_thread_data.sink.try_seek(std::time::Duration::from_millis(seek_time_ms));
 						current_timestamp = (position * 1000) as u128;
@@ -605,7 +614,10 @@ fn audio_thread_loop(
 				},
 				MessageToAudio::SeekStop => {
 					if seeking && !audio_thread_data.sink.empty() {
-						audio_thread_data.sink.play();
+						if audio_thread_data.sink.is_paused() && paused_from_seeking {
+							audio_thread_data.sink.play();
+							paused_from_seeking = false;
+						}
 						seeking = false;
 						saved_timestamp = if audio_thread_data.sink.is_paused() {None} else {Some(time::SystemTime::now())};
 					}
@@ -1706,6 +1718,7 @@ impl eframe::App for MyApp {
 			ctx.set_pixels_per_point(1.25);
 			self.first_frame_rendered = true;
 			add_font(ctx);
+			send_audio_signal(&self.audio_message_channel, MessageToAudio::UpdateEndBehavior(clone_loop_behavior(&self.loop_behavior)));
 		}
 		// 8 fps
 		let audio_data = request_rodio_data(&mut self.audio_message_channel, &mut self.audio_receive_channel);
