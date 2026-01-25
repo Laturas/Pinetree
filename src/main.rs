@@ -453,7 +453,7 @@ fn audio_thread_play_song(file_path: &str, sink: &mut rodio::Sink, recieve_pair:
 	return return_value;
 }
 
-pub const DEFAULT_VOLUME: f32 = 0.5;
+pub const DEFAULT_VOLUME: f32 = 0.75;
 pub const DEFAULT_SPEED: f32 = 1.0;
 
 fn clone_loop_behavior(behavior: &LoopBehavior) -> LoopBehavior {
@@ -1082,6 +1082,26 @@ fn song_folder_go_up(input_string: &str) -> String {
 }
 
 fn extract_file_name(input_string: &str) -> &str {
+	let last_bslash = input_string.rfind('\\');
+	let last_slash = input_string.rfind('/');
+
+	let start = match (last_bslash, last_slash) {
+		(Some(bslash), Some(slash)) => {
+			if bslash > slash {bslash} else {slash}
+		}
+		(Some(bslash), None) => bslash,
+		(None, Some(slash)) => slash,
+		(None, None) => 0,
+	};
+	return if start == 0 {input_string} else {&input_string[start + 1..]};
+}
+
+fn extract_folder_name(input_string: &str) -> &str {
+	let input_string = if input_string.ends_with('\\') {
+		&input_string[..input_string.len() - 1]
+	} else {
+		input_string
+	};
 	let last_bslash = input_string.rfind('\\');
 	let last_slash = input_string.rfind('/');
 
@@ -1985,6 +2005,17 @@ impl eframe::App for MyApp {
 							.hint_text("Artist..."))
 							.on_hover_text("Searches based on the artist name");
 					}
+					ui.horizontal(|ui| {
+						if ui.button("↑").clicked() {
+							self.current_song_folder = song_folder_go_up(&self.current_song_folder);
+							self.directory_tree = None;
+							self.searched_directory_tree = None;
+							self.active_directory_filepath = self.current_song_folder.clone();
+							self.active_search_text = "".to_string();
+							request_refresh = true;
+						}
+						ui.label(egui::RichText::new(extract_folder_name(&self.active_directory_filepath)).strong());
+					});
 					ui.add_space(5.0);
 
 					if let Some(active_directory) = active_directory {
@@ -2928,7 +2959,7 @@ impl eframe::App for MyApp {
 }
 
 fn main() -> eframe::Result {
-	let img = eframe::icon_data::from_png_bytes(include_bytes!("./../resources/Pinetree Logo.png"));
+	let img = eframe::icon_data::from_png_bytes(include_bytes!("./../resources/Pinetree_Logo.png"));
 	let options = if let Ok(img) = img {
 		eframe::NativeOptions {
 			viewport: egui::ViewportBuilder::default()
