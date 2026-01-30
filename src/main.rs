@@ -110,6 +110,7 @@ struct PersistentData {
 	theme: ThemePref,
 	playlists: Vec<Playlist>,
 	default_on_finish: LoopBehavior,
+	default_volume: f32,
 }
 
 fn default_persistent_data() -> PersistentData {
@@ -121,6 +122,7 @@ fn default_persistent_data() -> PersistentData {
 		theme: ThemePref::DARK,
 		playlists: init_playlist_from_filepath(""),
 		default_on_finish: LoopBehavior::Stop,
+		default_volume: DEFAULT_VOLUME,
 	}
 }
 
@@ -496,6 +498,34 @@ fn initialize_random_seed() -> u128 {
 	return random_seed;
 }
 
+// struct SongRingBuffer {
+// 	vec: Vec<String>,
+// 	front: usize,
+// 	back: usize,
+// 	current_element: usize,
+// }
+
+// fn new_ring_buffer(capacity: usize) -> SongRingBuffer {
+// 	return SongRingBuffer {
+// 		vec: Vec::<String>::with_capacity(capacity),
+// 		front: 0,
+// 		back: 0,
+// 		current_element: 0,
+// 	};
+// }
+
+/*
+******XXXXXX*******
+      ^Back ^Front
+*/
+// fn push_to_ring_buffer(buffer: &mut SongRingBuffer, element: &str) {
+// 	if (((buffer.front + 1) % buffer.vec.capacity()) == buffer.back) {
+// 		buffer.back = (buffer.back + 1) % buffer.vec.capacity();
+// 	}
+// 	buffer.vec[buffer.front] = element.to_string();
+// 	buffer.front = (buffer.front + 1) % buffer.vec.capacity();
+// }
+
 /**
 * Audio thread maintains its own list it works on, going through each element in that during the "Next".
 * 
@@ -534,11 +564,19 @@ fn audio_thread_loop(
 	let mut song_play_err = None;
 	let mut seeking = false;
 	let mut paused_from_seeking = false;
+
+	// let mut history_buffer = new_ring_buffer(255);
+
 	loop {
 		while let Some(data) = data_vec.pop() {
 			match data {
 				// MessageToAudio::None => {println!("Do nothing");},
 				MessageToAudio::PlaySong(song) => {
+					// if song != song_path {
+					// 	push_to_ring_buffer(&mut history_buffer, &song);
+					// 	history_buffer.current_element = ((history_buffer.front + history_buffer.vec.capacity()) - 1) % history_buffer.vec.capacity();
+					// }
+
 					{ /* Song playing */
 						song_play_err = audio_thread_play_song(&song, &mut audio_thread_data.sink, &recieve_pair);
 						
@@ -827,6 +865,7 @@ fn find_persistent_data() -> (PersistentData, String) {
 				let default_directory_identifier = "Default Directory: ";
 				let hide_dirs_identifier = "Hide Directories: "; 
 				let default_end_behavior_identifier = "Default End Behavior: "; 
+				let default_volume_identifier = "Default Volume: ";
 				if line.starts_with(theme_identifier) {
 					persistent_data.theme = str_to_theme_preference(&line[theme_identifier.len()..]);
 				} else if line.starts_with(default_directory_identifier) {
@@ -857,6 +896,8 @@ fn find_persistent_data() -> (PersistentData, String) {
 						},
 						_ => {},
 					}
+				} else if line.starts_with(default_volume_identifier) {
+					persistent_data.default_volume = line[default_volume_identifier.len()..].parse().unwrap_or(DEFAULT_VOLUME);
 				}
 			}
 			else if current_state == State::Playlists {
@@ -1564,6 +1605,10 @@ fn write_internal_data(path: &str, persistent_data: &PersistentData) -> Result<(
 		file.write_all(default_on_finish_to_str(&persistent_data.default_on_finish).as_bytes())?;
 		file.write_all("\n".as_bytes())?;
 
+		file.write_all("Default Volume: ".as_bytes())?;
+		file.write_all(persistent_data.default_volume.to_string().as_bytes())?;
+		file.write_all("\n".as_bytes())?;
+
 		file.write_all("Hide Directories: ".as_bytes())?;
 		let stow = if persistent_data.hide_directories_by_default {
 			"true"
@@ -1739,6 +1784,7 @@ impl eframe::App for MyApp {
 			self.first_frame_rendered = true;
 			add_font(ctx);
 			send_audio_signal(&self.audio_message_channel, MessageToAudio::UpdateEndBehavior(clone_loop_behavior(&self.loop_behavior)));
+			send_audio_signal(&self.audio_message_channel, MessageToAudio::UpdateVolume(self.song_volume));
 		}
 		// 8 fps
 		let audio_data = request_rodio_data(&mut self.audio_message_channel, &mut self.audio_receive_channel);
@@ -2839,6 +2885,17 @@ impl eframe::App for MyApp {
 					ui.horizontal(|ui| {
 						ui.label("Hide File Paths by Default: ");
 						ui.checkbox(&mut self.persistent_data.hide_directories_by_default, "");
+					});
+					ui.horizontal(|ui| {
+						ui.label("Default volume: ");
+						ui.add_sized([120.0, ui.spacing().interact_size.y],
+							egui::Slider::new(&mut self.persistent_data.default_volume, -0.2..=1.0)
+							.show_value(false)
+							.trailing_fill(true)
+						);
+						if ui.button("Match").clicked() {
+							self.persistent_data.default_volume = self.song_volume;
+						}
 					});
 					if ui.button("Save").clicked() {
 						/* TODO: Error handling */
