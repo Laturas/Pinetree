@@ -2307,6 +2307,7 @@ dependencies = [
  "eframe",
  "egui",
  "mp3-duration",
+ "raw-window-handle",
  "rodio",
  "windows-sys 0.61.2",
  "winres",

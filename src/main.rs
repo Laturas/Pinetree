@@ -314,6 +314,8 @@ struct MyApp {
 	hide_fp: bool,
 
 	save_err: SaveError,
+
+	pinned_mode: bool,
 }
 
 #[derive(Clone)]
@@ -323,6 +325,7 @@ struct RodioData {
 	is_paused: bool,
 	song_name: String,
 	error_message: Option<String>,
+	history_buffer_size: usize,
 }
 
 enum MessageToGui {
@@ -416,7 +419,7 @@ fn init_playlist_from_filepath(fp: &str) -> Vec<Playlist> {
 	return playlists;
 }
 use rodio::Source;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 /**
  * Defaults to 0
@@ -498,33 +501,91 @@ fn initialize_random_seed() -> u128 {
 	return random_seed;
 }
 
-// struct SongRingBuffer {
-// 	vec: Vec<String>,
-// 	front: usize,
-// 	back: usize,
-// 	current_element: usize,
-// }
+struct SongRingBuffer {
+	vec: Vec<String>,
+	front: usize,
+	back: usize,
+	current_element: usize,
+}
 
-// fn new_ring_buffer(capacity: usize) -> SongRingBuffer {
-// 	return SongRingBuffer {
-// 		vec: Vec::<String>::with_capacity(capacity),
-// 		front: 0,
-// 		back: 0,
-// 		current_element: 0,
-// 	};
-// }
+fn new_ring_buffer(capacity: usize) -> SongRingBuffer {
+	let mut v = Vec::<String>::new();
+	for _ in 0..capacity {
+		v.push("".to_string());
+	}
+	return SongRingBuffer {
+		vec: v,
+		front: 0,
+		back: 0,
+		current_element: 0,
+	};
+}
 
 /*
 ******XXXXXX*******
       ^Back ^Front
 */
-// fn push_to_ring_buffer(buffer: &mut SongRingBuffer, element: &str) {
-// 	if (((buffer.front + 1) % buffer.vec.capacity()) == buffer.back) {
-// 		buffer.back = (buffer.back + 1) % buffer.vec.capacity();
-// 	}
-// 	buffer.vec[buffer.front] = element.to_string();
-// 	buffer.front = (buffer.front + 1) % buffer.vec.capacity();
-// }
+fn push_to_ring_buffer(buffer: &mut SongRingBuffer, element: &str) {
+	if ((buffer.front + 1) % buffer.vec.capacity()) == buffer.back {
+		buffer.back = (buffer.back + 1) % buffer.vec.capacity();
+	}
+	buffer.vec[buffer.front] = element.to_string();
+	buffer.front = (buffer.front + 1) % buffer.vec.capacity();
+}
+
+/**
+* Returns true if it successfully goes back to the previous song
+*/
+fn try_go_to_previous_song(buffer: &mut SongRingBuffer) -> bool {
+	if buffer.current_element == buffer.back {
+		return false;
+	} else {
+		let cap = buffer.vec.capacity();
+		buffer.current_element = (buffer.current_element + cap - 1) % cap;
+		return true;
+	}
+}
+fn try_go_to_next_song(buffer: &mut SongRingBuffer) -> bool {
+	let cap = buffer.vec.capacity();
+	let max_el = ((buffer.front + cap) - 1) % cap;
+	if buffer.current_element == max_el {
+		return false;
+	} else {
+		buffer.current_element = (buffer.current_element + 1) % cap;
+		return true;
+	}
+}
+
+fn play_song(try_save_to_history: bool,
+	song: &str,
+	current_song: &mut String,
+	history_buffer: &mut SongRingBuffer,
+	audio_thread_data: &mut AudioThreadData,
+	recieve_pair: &Arc<(Mutex<Vec<MessageToAudio>>, Condvar)>) -> Option<String>
+{
+	let mut err = None;
+	if try_save_to_history && song != *current_song {
+		push_to_ring_buffer(history_buffer, &song);
+		history_buffer.current_element = ((history_buffer.front + history_buffer.vec.capacity()) - 1) % history_buffer.vec.capacity();
+	}
+
+	{ /* Song playing */
+		err = audio_thread_play_song(&song, &mut audio_thread_data.sink, recieve_pair);
+		if err.is_none() {
+			*current_song = song.to_string();
+		}
+	}
+	return err;
+}
+fn update_timestamps(song: &str,
+	song_length: &mut usize,
+	current_timestamp: &mut u128,
+	saved_timestamp: &mut Option<SystemTime>)
+{
+	*song_length = get_song_len_ms(song);
+	*current_timestamp = 0;
+	*saved_timestamp = Some(time::SystemTime::now());
+}
 
 /**
 * Audio thread maintains its own list it works on, going through each element in that during the "Next".
@@ -565,34 +626,23 @@ fn audio_thread_loop(
 	let mut seeking = false;
 	let mut paused_from_seeking = false;
 
-	// let mut history_buffer = new_ring_buffer(255);
+	let mut history_buffer = new_ring_buffer(255);
 
 	loop {
 		while let Some(data) = data_vec.pop() {
 			match data {
 				// MessageToAudio::None => {println!("Do nothing");},
 				MessageToAudio::PlaySong(song) => {
-					// if song != song_path {
-					// 	push_to_ring_buffer(&mut history_buffer, &song);
-					// 	history_buffer.current_element = ((history_buffer.front + history_buffer.vec.capacity()) - 1) % history_buffer.vec.capacity();
-					// }
+					song_play_err = play_song(true, &song, &mut song_path, &mut history_buffer, &mut audio_thread_data, &recieve_pair);
+					if song_play_err.is_none() {
+						update_timestamps(&song_path, &mut song_length, &mut current_timestamp, &mut saved_timestamp);
 
-					{ /* Song playing */
-						song_play_err = audio_thread_play_song(&song, &mut audio_thread_data.sink, &recieve_pair);
-						
-						if song_play_err.is_none() {
-							song_length = get_song_len_ms(&song);
-							song_path = song.clone();
-							current_timestamp = 0;
-
-
-							saved_timestamp = Some(time::SystemTime::now());
-							song_index = 0;
-							for i in 0..current_songs_collection.len() {
-								if let Some(e) = current_songs_collection.get(i) && *e == song {
-									song_index = i;
-									break;
-								}
+						/* TODO: Avoid having to do this O(n) loop */
+						song_index = 0;
+						for i in 0..current_songs_collection.len() {
+							if let Some(e) = current_songs_collection.get(i) && *e == song_path {
+								song_index = i;
+								break;
 							}
 						}
 					}
@@ -627,6 +677,7 @@ fn audio_thread_loop(
 						is_paused: audio_thread_data.sink.is_paused(),
 						song_name: song_path.clone(),
 						error_message: song_play_err.clone(),
+						history_buffer_size: history_buffer.vec.len(),
 					}));
 					send_cvar.notify_one();
 				},
@@ -682,50 +733,62 @@ fn audio_thread_loop(
 							saved_timestamp = None;
 						},
 						LoopBehavior::Loop => {
-							{ /* Song playing */
-								song_play_err = audio_thread_play_song(&song_path, &mut audio_thread_data.sink, &recieve_pair);
-								
-								if song_play_err.is_none() {
-									song_length = get_song_len_ms(&song_path);
-									current_timestamp = 0;
-									saved_timestamp = Some(time::SystemTime::now());
-								}
+							let path_clone = song_path.clone(); /* Borrow checker agony */
+							let err = play_song(false, &path_clone, &mut song_path, &mut history_buffer, &mut audio_thread_data, &recieve_pair);
+							if err.is_none() {
+								update_timestamps(&song_path, &mut song_length, &mut current_timestamp, &mut saved_timestamp);
 							}
 						},
 						LoopBehavior::Next => {
-							song_index = (song_index + 1) % current_songs_collection.len() as usize;
-							if current_songs_collection.len() > 0 {
-								if let Some(song) = current_songs_collection.get(song_index) {
-									{ /* Song playing */
-										song_play_err = audio_thread_play_song(&song, &mut audio_thread_data.sink, &recieve_pair);
-										
-										if song_play_err.is_none() {
-											song_length = get_song_len_ms(&song);
-											song_path = song.clone();
-											current_timestamp = 0;
-											saved_timestamp = Some(time::SystemTime::now());
-										}
+							let mut next_song: Option<String> = None;
+							let mut push_to_history = false;
+							if try_go_to_next_song(&mut history_buffer) {
+								song_index = 0;
+								for i in 0..current_songs_collection.len() {
+									if let Some(e) = current_songs_collection.get(i) && *e == history_buffer.vec[history_buffer.current_element] {
+										song_index = i;
+										break;
+									}
+								}
+
+								next_song = Some(history_buffer.vec[history_buffer.current_element].clone());
+							} else {
+								if current_songs_collection.len() > 0 {
+									song_index = (song_index + 1) % current_songs_collection.len() as usize;
+
+									if let Some(song) = current_songs_collection.get(song_index) {
+										push_to_history = true;
+										next_song = Some(song.clone());
 									}
 								}
 							}
-							
+							if let Some(song) = next_song {
+								song_play_err = play_song(push_to_history, &song, &mut song_path, &mut history_buffer, &mut audio_thread_data, &recieve_pair);
+								if song_play_err.is_none() {
+									update_timestamps(&song_path, &mut song_length, &mut current_timestamp, &mut saved_timestamp);
+								}
+							} else {
+								song_length = 1;
+								song_path = "".to_string();
+								current_timestamp = 0;
+								saved_timestamp = None;
+							}
 						}
 						LoopBehavior::Shuffle => {
 							if current_songs_collection.len() > 0 {
 								random_seed = generate_random_number(random_seed);
 								let song_index = ((random_seed % (usize::MAX as u128)) as usize) % current_songs_collection.len();
 								if let Some(song) = current_songs_collection.get(song_index) {
-									{ /* Song playing */
-										song_play_err = audio_thread_play_song(&song, &mut audio_thread_data.sink, &recieve_pair);
-										
-										if song_play_err.is_none() {
-											song_length = get_song_len_ms(&song);
-											song_path = song.clone();
-											current_timestamp = 0;
-											saved_timestamp = Some(time::SystemTime::now());
-										}
+									song_play_err = play_song(true, &song, &mut song_path, &mut history_buffer, &mut audio_thread_data, &recieve_pair);
+									if song_play_err.is_none() {
+										update_timestamps(&song_path, &mut song_length, &mut current_timestamp, &mut saved_timestamp);
 									}
 								}
+							} else {
+								song_length = 1;
+								song_path = "".to_string();
+								current_timestamp = 0;
+								saved_timestamp = None;
 							}
 						}
 					}
@@ -737,6 +800,25 @@ fn audio_thread_loop(
 				},
 				MessageToAudio::ClearError => {
 					song_play_err = None;
+				},
+				MessageToAudio::PreviousSong => {
+					if try_go_to_previous_song(&mut history_buffer) {
+						let song = history_buffer.vec[history_buffer.current_element].clone();
+						song_play_err = play_song(false, &song, &mut song_path, &mut history_buffer, &mut audio_thread_data, &recieve_pair);
+						if song_play_err.is_none() {
+							update_timestamps(&song_path, &mut song_length, &mut current_timestamp, &mut saved_timestamp);
+							song_index = 0;
+							for i in 0..current_songs_collection.len() {
+								if let Some(e) = current_songs_collection.get(i) && *e == song {
+									song_index = i;
+									break;
+								}
+							}
+						}
+					}
+				},
+				MessageToAudio::UpdateHistoryBufferSize(new_size) => {
+					history_buffer = new_ring_buffer(new_size);
 				},
 			}
 		}
@@ -774,6 +856,7 @@ fn request_rodio_data(send_pair: &Arc<(Mutex<Vec<MessageToAudio>>, Condvar)>, re
 		song_name: "".to_string(),
 		is_paused: false,
 		error_message: None,
+		history_buffer_size: 0,
 	};
 	// vec = if let Ok(mut vec) 
 }
@@ -805,6 +888,8 @@ enum MessageToAudio {
 	*/
 	SetSongCollection(Vec<String>, Option<usize>),
 	ClearError,
+	PreviousSong,
+	UpdateHistoryBufferSize(usize),
 }
 
 fn str_to_theme_preference(string: &str) -> ThemePref {
@@ -969,7 +1054,7 @@ impl Default for MyApp {
 			genre_search_text: "".to_string(),
 			artist_search_text: "".to_string(),
 			advanced_search_active: false,
-			song_volume: DEFAULT_VOLUME,
+			song_volume: persistent_data.default_volume,
 			// songs_list: song_entry_list,
 			active_directory_filepath: persistent_data.default_directory.clone(),
 			directory_map: dir_map,
@@ -1000,6 +1085,8 @@ impl Default for MyApp {
 			installer_error: None,
 
 			save_err: SaveError::None,
+
+			pinned_mode: false,
 		}
 	}
 }
@@ -1775,8 +1862,25 @@ enum SaveError {
 	Error(String),
 }
 
+#[cfg(target_os = "windows")]
+fn set_pin_mode(hwnd: windows_sys::Win32::Foundation::HWND, pin: bool) {
+	use windows_sys::Win32::UI::WindowsAndMessaging::*;
+
+    unsafe {
+        SetWindowPos(
+            hwnd,
+            if pin { HWND_TOPMOST } else { HWND_NOTOPMOST },
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE,
+        );
+    }
+}
+
 impl eframe::App for MyApp {
-	fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+	fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
 		if !self.first_frame_rendered {
 			set_visuals(&ctx, &self.persistent_data.theme);
 			/* Solved for now? */
@@ -1784,40 +1888,29 @@ impl eframe::App for MyApp {
 			self.first_frame_rendered = true;
 			add_font(ctx);
 			send_audio_signal(&self.audio_message_channel, MessageToAudio::UpdateEndBehavior(clone_loop_behavior(&self.loop_behavior)));
-			send_audio_signal(&self.audio_message_channel, MessageToAudio::UpdateVolume(self.song_volume));
+			send_audio_signal(&self.audio_message_channel, MessageToAudio::UpdateVolume(volume_curve(self.song_volume)));
 		}
 		// 8 fps
 		let audio_data = request_rodio_data(&mut self.audio_message_channel, &mut self.audio_receive_channel);
 		ctx.request_repaint_after(std::time::Duration::from_millis(125));
-
-		egui::TopBottomPanel::top("Header").show(ctx, |ui| {
-			ui.add_space(5.0);
-			ui.horizontal(|ui| {
-				ui.heading("Pinetree Player");
-				ui.with_layout(egui::Layout::right_to_left(egui::Align::RIGHT), |ui| {
-					if ui.button("←").on_hover_text_at_pointer("Backs up to the folder above").clicked() {
-						self.current_song_folder = song_folder_go_up(&self.current_song_folder);
-						self.directory_tree = None;
-						self.searched_directory_tree = None;
-						self.active_directory_filepath = self.current_song_folder.clone();
-						self.active_search_text = "".to_string();
-					}
-					if !self.hide_fp {
-						let song_folder_field = ui.add(egui::TextEdit::singleline(&mut self.current_song_folder)
-						.hint_text("Song folder..."))
-						.on_hover_text("The file path of the current open folder.\nRelative to the file path of the executable");
-	
-						if song_folder_field.lost_focus() && song_folder_field.ctx.input(|i| i.key_pressed(egui::Key::Enter)) {
+		let height = ctx.available_rect().height();
+		if height > 80.0 {
+			egui::TopBottomPanel::top("Header").show(ctx, |ui| {
+				ui.add_space(5.0);
+				ui.horizontal(|ui| {
+					ui.heading("Pinetree Player");
+					ui.with_layout(egui::Layout::right_to_left(egui::Align::RIGHT), |ui| {
+						if ui.button("←").on_hover_text_at_pointer("Backs up to the folder above").clicked() {
+							self.current_song_folder = song_folder_go_up(&self.current_song_folder);
 							self.directory_tree = None;
 							self.searched_directory_tree = None;
 							self.active_directory_filepath = self.current_song_folder.clone();
 							self.active_search_text = "".to_string();
 						}
-					} else {
-						ui.horizontal(|ui| {
-							ui.disable();
-							let mut hidden_str = "(Hidden)".to_string();
-							let song_folder_field = ui.add(egui::TextEdit::singleline(&mut hidden_str));
+						if !self.hide_fp {
+							let song_folder_field = ui.add(egui::TextEdit::singleline(&mut self.current_song_folder)
+							.hint_text("Song folder..."))
+							.on_hover_text("The file path of the current open folder.\nRelative to the file path of the executable");
 		
 							if song_folder_field.lost_focus() && song_folder_field.ctx.input(|i| i.key_pressed(egui::Key::Enter)) {
 								self.directory_tree = None;
@@ -1825,25 +1918,38 @@ impl eframe::App for MyApp {
 								self.active_directory_filepath = self.current_song_folder.clone();
 								self.active_search_text = "".to_string();
 							}
-							song_folder_field
-						});
-					}
-					if !self.hide_fp {
-						let text = egui::RichText::new("Hide").line_height(Some(15.0));
-						if ui.button(text).clicked() {
-							self.hide_fp = true;
+						} else {
+							ui.horizontal(|ui| {
+								ui.disable();
+								let mut hidden_str = "(Hidden)".to_string();
+								let song_folder_field = ui.add(egui::TextEdit::singleline(&mut hidden_str));
+			
+								if song_folder_field.lost_focus() && song_folder_field.ctx.input(|i| i.key_pressed(egui::Key::Enter)) {
+									self.directory_tree = None;
+									self.searched_directory_tree = None;
+									self.active_directory_filepath = self.current_song_folder.clone();
+									self.active_search_text = "".to_string();
+								}
+								song_folder_field
+							});
 						}
-					} else {
-						let text = egui::RichText::new("Show").line_height(Some(15.0));
-						if ui.button(text).clicked() {
-							self.hide_fp = false;
+						if !self.hide_fp {
+							let text = egui::RichText::new("Hide").line_height(Some(15.0));
+							if ui.button(text).clicked() {
+								self.hide_fp = true;
+							}
+						} else {
+							let text = egui::RichText::new("Show").line_height(Some(15.0));
+							if ui.button(text).clicked() {
+								self.hide_fp = false;
+							}
 						}
-					}
-					
+						
+					});
 				});
+				ui.add_space(5.0);
 			});
-			ui.add_space(5.0);
-		});
+		}
 		
 		let active_directory: Option<&Directory> = {
 			if let Some(dir) = self.directory_map.get(&self.active_directory_filepath) {
@@ -1889,14 +1995,23 @@ impl eframe::App for MyApp {
 					let raw_text = if audio_data.is_paused {format!("▶")} else {format!("⏸")};
 					egui::RichText::new(raw_text).line_height(line_height).size(icon_size)
 				};
-				if ui.button(pause_play_text).clicked() || ctx.input_mut(|i| i.consume_shortcut(&PAUSE)) {
-					send_audio_signal(&self.audio_message_channel, MessageToAudio::TogglePause);
-				}
-
+				let prev_text = {
+					let raw_text = "⏮";
+					egui::RichText::new(raw_text).line_height(line_height).size(icon_size)
+				};
 				let skip_text = {
 					let raw_text = "⏭";
 					egui::RichText::new(raw_text).line_height(line_height).size(icon_size)
 				};
+
+
+				if ui.button(prev_text).clicked() {
+					send_audio_signal(&self.audio_message_channel, MessageToAudio::PreviousSong);
+				}
+
+				if ui.button(pause_play_text).clicked() || ctx.input_mut(|i| i.consume_shortcut(&PAUSE)) {
+					send_audio_signal(&self.audio_message_channel, MessageToAudio::TogglePause);
+				}
 				if ui.button(skip_text).clicked() {
 					send_audio_signal(&self.audio_message_channel, MessageToAudio::SongEnd);
 				}
@@ -1906,18 +2021,10 @@ impl eframe::App for MyApp {
 				let secs = playback_pos / 1000;
 				let prev_vol = self.song_volume;
 				let volume_text = {
-					let raw_text = if self.song_volume > 0.5 {
-						"🔊"
-					}
-					else if self.song_volume > 0.25 {
-						"🔉"
-					}
-					else if self.song_volume > -0.195 {
-						"🔈"
-					}
-					else {
-						"🔇"
-					};
+					let raw_text = if self.song_volume > 0.5 {"🔊"}
+						else if self.song_volume > 0.25 {"🔉"}
+						else if self.song_volume > -0.195 {"🔈"}
+						else {"🔇"};
 					egui::RichText::new(raw_text).line_height(line_height).size(icon_size)
 				};
 				ui.label(volume_text);
@@ -1944,7 +2051,7 @@ impl eframe::App for MyApp {
 				if seeker.dragged() {
 					send_audio_signal(&self.audio_message_channel, MessageToAudio::Seek(playback_pos));
 				}
-				if seeker.drag_released() {
+				if seeker.drag_stopped() {
 					send_audio_signal(&self.audio_message_channel, MessageToAudio::SeekStop);
 				}
 				if ctx.input(|i| i.key_pressed(egui::Key::ArrowRight)) {
@@ -1957,11 +2064,9 @@ impl eframe::App for MyApp {
 							focused = true;
 						}
 					});
-					// If you only want to trigger when *nothing* is focused
 					if !focused {
 						let seek_pos = audio_data.playback_position + 5000; // 5 seconds
 						send_audio_signal(&self.audio_message_channel, MessageToAudio::Seek(seek_pos))
-						// Perform your global action here
 					}
 				}
 				if ctx.input(|i| i.key_pressed(egui::Key::ArrowLeft)) {
@@ -2005,9 +2110,10 @@ impl eframe::App for MyApp {
 									ui.selectable_value(&mut self.browse_mode, LeftPanelMode::Playlists, "Playlists");
 								});
 						}
-						if ui.button("Advanced").clicked() {
-							self.advanced_search_active = !self.advanced_search_active;
-						}
+						/* TODO */
+						// if ui.button("Advanced").clicked() {
+						// 	self.advanced_search_active = !self.advanced_search_active;
+						// }
 						request_refresh = ui.button("Refresh").clicked() || ctx.input_mut(|i| i.consume_shortcut(&REFRESH));
 					});
 
@@ -2116,9 +2222,9 @@ impl eframe::App for MyApp {
 									ui.selectable_value(&mut self.browse_mode, LeftPanelMode::Playlists, "Playlists");
 								});
 						}
-						if ui.button("Advanced").clicked() {
-							self.advanced_search_active = !self.advanced_search_active;
-						}
+						// if ui.button("Advanced").clicked() {
+						// 	self.advanced_search_active = !self.advanced_search_active;
+						// }
 						request_refresh = ui.button("Refresh").clicked() || ctx.input_mut(|i| i.consume_shortcut(&REFRESH));
 					});
 					if self.browse_mode == LeftPanelMode::Files {
@@ -2190,7 +2296,22 @@ impl eframe::App for MyApp {
 								self.playlist_tree = None;
 							}
 						} else {
-							self.playlist_tree = Some(build_playlist_tree(&self.persistent_data.playlists));
+							let tree = build_playlist_tree(&self.persistent_data.playlists);
+							let mut new_collection = Vec::<String>::new();
+							let mut new_current_location = None;
+							let mut i = 0;
+							
+							for thing in &tree {
+								if let Some(name) = &thing.song_name {
+									new_collection.push(name.clone());
+									if *name == audio_data.song_name {
+										new_current_location = Some(i);
+									}
+									i += 1;
+								}
+							}
+							self.playlist_tree = Some(tree);
+							send_audio_signal(&self.audio_message_channel, MessageToAudio::SetSongCollection(new_collection, new_current_location));
 						}
 					}
 
@@ -2282,9 +2403,9 @@ impl eframe::App for MyApp {
 				},
 				LeftPanelMode::SelectSongs => {
 					ui.horizontal(|ui| {
-						if ui.button("Advanced").clicked() {
-							self.advanced_search_active = !self.advanced_search_active;
-						}
+						// if ui.button("Advanced").clicked() {
+						// 	self.advanced_search_active = !self.advanced_search_active;
+						// }
 						request_refresh = ui.button("Refresh").clicked() || ctx.input_mut(|i| i.consume_shortcut(&REFRESH));
 					});
 
@@ -2897,6 +3018,31 @@ impl eframe::App for MyApp {
 							self.persistent_data.default_volume = self.song_volume;
 						}
 					});
+					ui.horizontal(|ui| {
+						// ui.label("History buffer size: ");
+						// let mut size = audio_data.history_buffer_size;
+						// ui.text_edit_singleline(format!("{}", size));
+					});
+					#[cfg(target_os = "windows")] {
+						ui.horizontal(|ui| {
+							use windows_sys::Win32::Foundation::HWND;
+							use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+							
+							ui.label("Pin window to top: ");
+							if ui.checkbox(&mut self.pinned_mode, "").clicked() {
+								if let Ok(handle) = frame.window_handle() {
+									match handle.as_raw() {
+										RawWindowHandle::Win32(handle) => {
+											let hwnd = handle.hwnd.get() as HWND;
+											set_pin_mode(hwnd, self.pinned_mode);
+										},
+										_ => {},
+									};
+								}
+							}
+						});
+					}
+					
 					if ui.button("Save").clicked() {
 						/* TODO: Error handling */
 						let write_to = build_full_filepath(&self.installed_location, "internal_pinetree_data.txt");
