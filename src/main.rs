@@ -234,6 +234,13 @@ fn default_install_path() -> String {
 			return local_share.to_string();
 		}
 	}
+	#[cfg(target_os = "macos")] {
+		let home = unix_folders::home();
+		if let Some(home_folder) = home {
+			let local_share = build_full_filepath(&home_folder, "Applications");
+			return local_share.to_string();
+		}
+	}
 	"".to_string()
 }
 fn default_song_path() -> String {
@@ -245,6 +252,13 @@ fn default_song_path() -> String {
 		}
 	}
 	#[cfg(target_os = "linux")] {
+		let home = unix_folders::home();
+		if let Some(home_folder) = home {
+			let local_share = build_full_filepath(&home_folder, "Music");
+			return local_share.to_string();
+		}
+	}
+	#[cfg(target_os = "macos")] {
 		let home = unix_folders::home();
 		if let Some(home_folder) = home {
 			let local_share = build_full_filepath(&home_folder, "Music");
