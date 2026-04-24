@@ -16,11 +16,11 @@ winres = "0.1"
 
 [package.metadata.winres]
 
-[profile.release]
-strip = true  # Automatically strip symbols from the binary.
-lto = true
-panic = "abort"
-codegen-units = 1
+# [profile.release]
+# strip = true  # Automatically strip symbols from the binary.
+# lto = true
+# panic = "abort"
+# codegen-units = 1
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = ">= 0.59.0", features = [

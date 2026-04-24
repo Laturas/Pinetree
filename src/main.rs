@@ -576,6 +576,10 @@ fn song_is_in_last_n(song: &String, history_buffer: &SongRingBuffer, count: usiz
 
 	let mut cur = history_buffer.front;
 	let cap = history_buffer.vec.capacity();
+	/* Just helps make sure we don't divide by zero */
+	if cap == 0 {
+		return false;
+	}
 
 	for _ in 0..count {
 		if let Some(s) = history_buffer.vec.get(cur) {
@@ -781,24 +785,12 @@ fn audio_thread_loop(
 						LoopBehavior::Next => {
 							let mut next_song: Option<String> = None;
 							let mut push_to_history = false;
-							if try_go_to_next_song(&mut history_buffer) {
-								song_index = 0;
-								for i in 0..current_songs_collection.len() {
-									if let Some(e) = current_songs_collection.get(i) && *e == history_buffer.vec[history_buffer.current_element] {
-										song_index = i;
-										break;
-									}
-								}
+							if current_songs_collection.len() > 0 {
+								song_index = (song_index + 1) % current_songs_collection.len() as usize;
 
-								next_song = Some(history_buffer.vec[history_buffer.current_element].clone());
-							} else {
-								if current_songs_collection.len() > 0 {
-									song_index = (song_index + 1) % current_songs_collection.len() as usize;
-
-									if let Some(song) = current_songs_collection.get(song_index) {
-										push_to_history = true;
-										next_song = Some(song.clone());
-									}
+								if let Some(song) = current_songs_collection.get(song_index) {
+									push_to_history = true;
+									next_song = Some(song.clone());
 								}
 							}
 							if let Some(song) = next_song {
@@ -1102,7 +1094,9 @@ fn initialize_crash_logger(pinetree_directory: &str) {
             "Unknown location".to_string()
         };
 
-        let _ = writeln!(file, "Panic occurred: {}\nLocation: {}\n", msg, location);
+		let backtrace = std::backtrace::Backtrace::force_capture();
+
+        let _ = writeln!(file, "Panic occurred: {}\nLocation: {}\nBacktrace: {:?}", msg, location, backtrace);
     }));
 }
 
@@ -3255,7 +3249,6 @@ impl eframe::App for MyApp {
 						ui.label("- Ctrl + P: Pauses or unpauses the song");
 						ui.label("- Ctrl + F: Search in current directory/playlist");
 						ui.label("- Ctrl + R: Refreshes current directory/playlist");
-						ui.label("- Ctrl + P: Pauses or unpauses the song");
 						ui.label("- LeftArrow/RightArrow: Skips behind/forward 5 seconds in the current song");
 						ui.label("- Ctrl + LeftArrow/RightArrow: Plays the previous song or skips to the next song");
 	
