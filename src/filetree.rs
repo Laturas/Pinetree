@@ -19,6 +19,10 @@ impl FileElement {
     }
 }
 
+fn abs(x: i32) -> i32 {
+    return if x < 0 {-x} else {x};
+}
+
 // I originally stored the folder name here, but as it turns out we don't even need it because
 // To access this we need to grab it from a hashmap
 pub struct FileTreeNode {

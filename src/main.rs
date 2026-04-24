@@ -237,7 +237,7 @@ fn default_install_path() -> String {
 	#[cfg(target_os = "macos")] {
 		let home = unix_folders::home();
 		if let Some(home_folder) = home {
-			let local_share = build_full_filepath(&home_folder, "Applications");
+			let local_share = build_full_filepath(&home_folder, "Library/Application Support");
 			return local_share.to_string();
 		}
 	}
