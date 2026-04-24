@@ -556,6 +556,29 @@ fn try_go_to_next_song(buffer: &mut SongRingBuffer) -> bool {
 	}
 }
 
+fn song_is_in_last_n(song: &String, history_buffer: &SongRingBuffer, count: usize) -> bool {
+	let mut found = false;
+
+	let mut cur = history_buffer.front;
+	let cap = history_buffer.vec.capacity();
+
+	for _ in 0..count {
+		if let Some(s) = history_buffer.vec.get(cur) {
+			if s == song {
+				found = true;
+				break;
+			}
+		}
+		
+		if cur == history_buffer.back {
+			break;
+		}
+		cur = (cur + cap - 1) % cap;
+	}
+
+	return found;
+}
+
 fn play_song(try_save_to_history: bool,
 	song: &str,
 	current_song: &mut String,
@@ -625,6 +648,7 @@ fn audio_thread_loop(
 	let mut song_play_err = None;
 	let mut seeking = false;
 	let mut paused_from_seeking = false;
+	let randomization_memory = 5;
 
 	let mut history_buffer = new_ring_buffer(255);
 
@@ -776,12 +800,30 @@ fn audio_thread_loop(
 						}
 						LoopBehavior::Shuffle => {
 							if current_songs_collection.len() > 0 {
-								random_seed = generate_random_number(random_seed);
-								let song_index = ((random_seed % (usize::MAX as u128)) as usize) % current_songs_collection.len();
-								if let Some(song) = current_songs_collection.get(song_index) {
-									song_play_err = play_song(true, &song, &mut song_path, &mut history_buffer, &mut audio_thread_data, &recieve_pair);
-									if song_play_err.is_none() {
-										update_timestamps(&song_path, &mut song_length, &mut current_timestamp, &mut saved_timestamp);
+								let mut song_chosen = false;
+								for _ in 0..32 {
+									random_seed = generate_random_number(random_seed);
+									let song_index = ((random_seed % (usize::MAX as u128)) as usize) % current_songs_collection.len();
+									if let Some(song) = current_songs_collection.get(song_index) {
+										if song_is_in_last_n(song, &history_buffer, randomization_memory) {
+											continue;
+										}
+										song_play_err = play_song(true, &song, &mut song_path, &mut history_buffer, &mut audio_thread_data, &recieve_pair);
+										if song_play_err.is_none() {
+											update_timestamps(&song_path, &mut song_length, &mut current_timestamp, &mut saved_timestamp);
+										}
+										song_chosen = true;
+										break;
+									}
+								}
+								if !song_chosen {
+									random_seed = generate_random_number(random_seed);
+									let song_index = ((random_seed % (usize::MAX as u128)) as usize) % current_songs_collection.len();
+									if let Some(song) = current_songs_collection.get(song_index) {
+										song_play_err = play_song(true, &song, &mut song_path, &mut history_buffer, &mut audio_thread_data, &recieve_pair);
+										if song_play_err.is_none() {
+											update_timestamps(&song_path, &mut song_length, &mut current_timestamp, &mut saved_timestamp);
+										}
 									}
 								}
 							} else {
@@ -907,12 +949,17 @@ fn find_persistent_data() -> (PersistentData, String) {
 	let data_file = if let Ok(same_dir) = std::fs::File::open("internal_pinetree_data.txt") {
 		ret_str = "./".to_string();
 		same_dir
-	} else if let Ok(default_install_location) = std::fs::File::open(build_full_filepath(&build_full_filepath(&default_install_path(), "Pinetree"), "internal_pinetree_data.txt")) {
-		ret_str = build_full_filepath(&default_install_path(), "Pinetree");
-		default_install_location
 	} else {
-		return (default_persistent_data(), ret_str);
-	};
+		let pinetree_folder = &build_full_filepath(&default_install_path(), "Pinetree");
+		let internal_data_file = build_full_filepath(pinetree_folder, "internal_pinetree_data.txt");
+
+		if let Ok(default_install_location) = std::fs::File::open(internal_data_file) {
+			ret_str = build_full_filepath(&default_install_path(), "Pinetree");
+			default_install_location
+		} else {
+			return (default_persistent_data(), ret_str);
+		}
+	} ;
 	let mut persistent_data = default_persistent_data();
 
 	persistent_data.data_file_exists = true;
@@ -1038,6 +1085,14 @@ impl Default for MyApp {
 		init_directory_at_filepath(&persistent_data.default_directory, &mut dir_map);
 
 		let start_mode = if persistent_data.data_file_exists {
+			let target_exe_path = build_full_filepath(&installed_location, "pinetree.exe");
+
+			if let Ok(current_exe) = std::env::current_exe() {
+				if let Ok(_) = std::fs::copy(&current_exe, &target_exe_path) {
+					// Nothing: Success
+					// Continue as normal
+				}
+			}
 			CentralPanelMode::Settings
 		} else {
 			CentralPanelMode::Installer
@@ -1112,14 +1167,17 @@ fn init_directory_at_filepath(directory_filepath: &str, dir_map: &mut HashMap<St
 	if let Ok(paths) = read_result {
 		let mut songs_vec = Vec::<String>::new();
 		let mut subdirectory_vec = Vec::<String>::new();
+
 		for path in paths {
 			if let Ok(valid_path) = path {
 				if let Ok(file_name) = valid_path.file_name().into_string() {
+
 					if let Ok(file_type) = valid_path.file_type() && file_type.is_dir() {
 						subdirectory_vec.push(build_full_filepath(directory_filepath, &file_name));
 					} else if file_name.ends_with(".mp3") {
 						songs_vec.push(build_full_filepath(directory_filepath, &file_name));
-					} 
+					}
+
 				}
 			}
 		}
@@ -1343,6 +1401,8 @@ fn get_dir_tree_elements(output_vec: &mut Vec<DirTreeElement>, directory_string:
 pub const REFRESH: egui::KeyboardShortcut = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::R);
 pub const SEARCH: egui::KeyboardShortcut = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::F);
 pub const PAUSE: egui::KeyboardShortcut = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::P);
+pub const PREV_SONG: egui::KeyboardShortcut = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::ArrowLeft);
+pub const NEXT_SONG: egui::KeyboardShortcut = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::ArrowRight);
 
 fn render_directory_elements(
 	ui: &mut egui::Ui,
@@ -1675,8 +1735,7 @@ fn write_internal_data(path: &str, persistent_data: &PersistentData) -> Result<(
 	use std::io::prelude::*;
 	let file = std::fs::File::create(path);
 	if let Ok(mut file) = file {
-		file.write_all("VERSION: OPEN BETA 0".as_bytes())?;
-		file.write_all(persistent_data.data_file_version.as_bytes())?;
+		file.write_all("VERSION: OPEN BETA 4.5".as_bytes())?;
 		file.write_all("\n".as_bytes())?;
 		
 		file.write_all("SETTINGS\n".as_bytes())?;
@@ -1988,7 +2047,6 @@ impl eframe::App for MyApp {
 				}
 			});
 			ui.horizontal(|ui| {
-
 				let icon_size = 16.0;
 				let line_height = Some(icon_size + 3.0);
 				let pause_play_text = {
@@ -2004,21 +2062,16 @@ impl eframe::App for MyApp {
 					egui::RichText::new(raw_text).line_height(line_height).size(icon_size)
 				};
 
-
-				if ui.button(prev_text).clicked() {
+				if ui.button(prev_text).clicked() || ctx.input_mut(|i| i.consume_shortcut(&PREV_SONG)) {
 					send_audio_signal(&self.audio_message_channel, MessageToAudio::PreviousSong);
 				}
-
 				if ui.button(pause_play_text).clicked() || ctx.input_mut(|i| i.consume_shortcut(&PAUSE)) {
 					send_audio_signal(&self.audio_message_channel, MessageToAudio::TogglePause);
 				}
-				if ui.button(skip_text).clicked() {
+				if ui.button(skip_text).clicked() || ctx.input_mut(|i| i.consume_shortcut(&NEXT_SONG)) {
 					send_audio_signal(&self.audio_message_channel, MessageToAudio::SongEnd);
 				}
 
-				let mut playback_pos = audio_data.playback_position;
-
-				let secs = playback_pos / 1000;
 				let prev_vol = self.song_volume;
 				let volume_text = {
 					let raw_text = if self.song_volume > 0.5 {"🔊"}
@@ -2036,7 +2089,18 @@ impl eframe::App for MyApp {
 				if prev_vol != self.song_volume {
 					send_audio_signal(&self.audio_message_channel, MessageToAudio::UpdateVolume(volume_curve(self.song_volume)));
 				}
-				ui.label(format!("{}:{}{}", secs / 60, if secs % 60 < 10 {"0"} else {""}, secs % 60));
+
+				let mut playback_pos = audio_data.playback_position;
+				let secs = playback_pos / 1000;
+
+				/* When the seconds < 10, it is displayed as e.g. 3:05 and not 3:5 */
+				let timestamp = {
+					let minute_count = secs / 60;
+					let remaining_seconds = secs % 60;
+					format!("{}:{}{}", minute_count, remaining_seconds / 10, remaining_seconds % 10)
+				};
+				ui.label(timestamp);
+
 				let remaining_width = ui.available_width();
 				ui.spacing_mut().slider_width = remaining_width;
 
@@ -2054,36 +2118,19 @@ impl eframe::App for MyApp {
 				if seeker.drag_stopped() {
 					send_audio_signal(&self.audio_message_channel, MessageToAudio::SeekStop);
 				}
-				if ctx.input(|i| i.key_pressed(egui::Key::ArrowRight)) {
-					let mut focused = false;
 
-					ctx.memory( |memory| {
-						if memory.focused().is_none() {
-							focused = false;
-						} else {
-							focused = true;
-						}
-					});
-					if !focused {
+				let mut focused = false;
+				ctx.memory( |memory| {
+					focused = !memory.focused().is_none();
+				});
+				if !focused {
+					if ctx.input(|i| i.key_pressed(egui::Key::ArrowRight)) {
 						let seek_pos = audio_data.playback_position + 5000; // 5 seconds
 						send_audio_signal(&self.audio_message_channel, MessageToAudio::Seek(seek_pos))
 					}
-				}
-				if ctx.input(|i| i.key_pressed(egui::Key::ArrowLeft)) {
-					let mut focused = false;
-
-					ctx.memory( |memory| {
-						if memory.focused().is_none() {
-							focused = false;
-						} else {
-							focused = true;
-						}
-					});
-					// If you only want to trigger when *nothing* is focused
-					if !focused {
+					if ctx.input(|i| i.key_pressed(egui::Key::ArrowLeft)) {
 						let seek_pos = audio_data.playback_position.saturating_sub(5000); // 5 seconds
 						send_audio_signal(&self.audio_message_channel, MessageToAudio::Seek(seek_pos))
-						// Perform your global action here
 					}
 				}
 			});
@@ -2277,7 +2324,8 @@ impl eframe::App for MyApp {
 							let mut tree = Vec::<PlaylistTreeElement>::new();
 							let mut collection = Vec::<String>::new();
 							let mut new_current_location: Option<usize> = None;
-							let playlists = &self.persistent_data.playlists;
+							let playlists = &mut self.persistent_data.playlists;
+							playlists.sort_by_key(|playlist| playlist.name.to_lowercase());
 							if let Some(playlist) = playlists.get(active_playlist_index) {
 								for song in &playlist.songs {
 									tree.push(PlaylistTreeElement {
@@ -2809,6 +2857,8 @@ impl eframe::App for MyApp {
 				self.searched_directory_tree = None;
 			},
 			FileActions::EnterDirectory(dir) => {
+				self.search_text = "".to_string();
+				self.active_search_text = "".to_string();
 				self.active_directory_filepath = dir.clone();
 				self.current_song_folder = dir;
 				self.directory_tree = None;
@@ -2831,6 +2881,8 @@ impl eframe::App for MyApp {
 				}
 			},
 			FileActions::EnterPlaylist(index) => {
+				self.search_text = "".to_string();
+				self.active_search_text = "".to_string();
 				self.active_playlist_index = Some(index);
 				self.playlist_tree = None;
 				ctx.request_repaint();
@@ -3018,11 +3070,11 @@ impl eframe::App for MyApp {
 							self.persistent_data.default_volume = self.song_volume;
 						}
 					});
-					ui.horizontal(|ui| {
-						// ui.label("History buffer size: ");
-						// let mut size = audio_data.history_buffer_size;
-						// ui.text_edit_singleline(format!("{}", size));
-					});
+					// ui.horizontal(|ui| {
+					// 	ui.label("History buffer size: ");
+					// 	let mut size = audio_data.history_buffer_size;
+					// 	ui.text_edit_singleline(format!("{}", size));
+					// });
 					#[cfg(target_os = "windows")] {
 						ui.horizontal(|ui| {
 							use windows_sys::Win32::Foundation::HWND;
@@ -3130,21 +3182,36 @@ impl eframe::App for MyApp {
 					ui.label("Additional note: Creating shortcuts/taskbar icons automatically is unfortunately not supported because it would mean requiring admin permissions on Windows");
 				},
 				CentralPanelMode::About => {
-					ui.vertical_centered(|ui| {
-						ui.heading("About");
+					egui::ScrollArea::vertical().show(ui, |ui| {
+						ui.vertical_centered(|ui| {
+							ui.heading("About");
+							ui.add_space(5.0);
+						});
+						ui.label("The download page and user manual can be found here:");
+						ui.hyperlink("https://katelyndoucette.com/projects/pinetree");
+	
+						ui.add_space(10.0);
+						ui.label("This application was written by Katelyn Doucette.");
+						ui.hyperlink("https://katelyndoucette.com/");
+						ui.add_space(10.0);
+						ui.label("It is also free and open source. The source code can be found at the repository here:");
+						ui.hyperlink("https://github.com/Laturas/Pinetree");
+						ui.vertical_centered(|ui| {
+							ui.heading("Reference Manual");
+							ui.add_space(5.0);
+						});
+						ui.label("The following are some keyboard shortcuts you can use to navigate around:");
 						ui.add_space(5.0);
+						ui.label("- Ctrl + P: Pauses or unpauses the song");
+						ui.label("- Ctrl + F: Search in current directory/playlist");
+						ui.label("- Ctrl + R: Refreshes current directory/playlist");
+						ui.label("- Ctrl + P: Pauses or unpauses the song");
+						ui.label("- LeftArrow/RightArrow: Skips behind/forward 5 seconds in the current song");
+						ui.label("- Ctrl + LeftArrow/RightArrow: Plays the previous song or skips to the next song");
+	
+						ui.add_space(10.0);
+						ui.label("Thank you for using Pinetree!");
 					});
-					ui.label("The download page and user manual can be found here:");
-					ui.label("(site not yet created)"); /* TODO */
-
-					ui.add_space(10.0);
-					ui.label("This application was written by Katelyn Doucette.");
-					ui.hyperlink("https://katelyndoucette.com/");
-					ui.add_space(10.0);
-					ui.label("It is also free and open source. The source code can be found at the repository here:");
-					ui.hyperlink("https://github.com/Laturas/Pinetree");
-					ui.add_space(10.0);
-					ui.label("Thank you for using Pinetree!");
 				},
 				CentralPanelMode::InstallationSuccess => {
 					ui.vertical_centered(|ui| {

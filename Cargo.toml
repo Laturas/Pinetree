@@ -1,6 +1,6 @@
 [package]
 name = "pinetree"
-version = "1.9.0"
+version = "2.4.5"
 edition = "2024"
 
 [dependencies]
