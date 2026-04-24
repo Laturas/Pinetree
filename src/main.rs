@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex, Condvar};
 use std::{thread, time, u128};
 use std::collections::HashMap;
 use std::io::BufRead;
+use std::panic;
 
 use eframe::egui;
 
@@ -234,6 +235,13 @@ fn default_install_path() -> String {
 			return local_share.to_string();
 		}
 	}
+	#[cfg(target_os = "macos")] {
+		let home = unix_folders::home();
+		if let Some(home_folder) = home {
+			let local_share = build_full_filepath(&home_folder, "Library/Application Support");
+			return local_share.to_string();
+		}
+	}
 	"".to_string()
 }
 fn default_song_path() -> String {
@@ -245,6 +253,13 @@ fn default_song_path() -> String {
 		}
 	}
 	#[cfg(target_os = "linux")] {
+		let home = unix_folders::home();
+		if let Some(home_folder) = home {
+			let local_share = build_full_filepath(&home_folder, "Music");
+			return local_share.to_string();
+		}
+	}
+	#[cfg(target_os = "macos")] {
 		let home = unix_folders::home();
 		if let Some(home_folder) = home {
 			let local_share = build_full_filepath(&home_folder, "Music");
@@ -1063,6 +1078,33 @@ fn find_persistent_data() -> (PersistentData, String) {
 
 	return (persistent_data, ret_str);
 }
+use std::io::Write;
+fn initialize_crash_logger(pinetree_directory: &str) {
+	let log_location = build_full_filepath(pinetree_directory, "crash_report.log").to_string();
+	panic::set_hook(Box::new(move |panic_info| {
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_location)
+            .unwrap();
+
+        let msg = if let Some(s) = panic_info.payload().downcast_ref::<&str>() {
+            *s
+        } else if let Some(s) = panic_info.payload().downcast_ref::<String>() {
+            s.as_str()
+        } else {
+            "Unknown panic payload"
+        };
+
+        let location = if let Some(loc) = panic_info.location() {
+            format!("{}:{}", loc.file(), loc.line())
+        } else {
+            "Unknown location".to_string()
+        };
+
+        let _ = writeln!(file, "Panic occurred: {}\nLocation: {}\n", msg, location);
+    }));
+}
 
 impl Default for MyApp {
 	fn default() -> Self {
@@ -1097,6 +1139,14 @@ impl Default for MyApp {
 		} else {
 			CentralPanelMode::Installer
 		};
+
+		let crash_log_location = if persistent_data.data_file_exists {
+			&installed_location
+		} else {
+			&"./".to_string()
+		};
+
+		initialize_crash_logger(crash_log_location);
 
 		Self {
 			first_frame_rendered: false,
