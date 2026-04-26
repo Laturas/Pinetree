@@ -103,6 +103,8 @@ enum CentralPanelMode {
 	About,
 }
 
+pub const CURRENT_VERSION: &str = "OPEN BETA 5";
+
 struct PersistentData {
 	data_file_exists: bool,
 	hide_directories_by_default: bool,
@@ -112,18 +114,20 @@ struct PersistentData {
 	playlists: Vec<Playlist>,
 	default_on_finish: LoopBehavior,
 	default_volume: f32,
+	shuffle_memory: usize,
 }
 
 fn default_persistent_data() -> PersistentData {
 	PersistentData {
 		data_file_exists: false,
 		hide_directories_by_default: false,
-		data_file_version: "".to_string(),
+		data_file_version: CURRENT_VERSION.to_string(),
 		default_directory: "".to_string(),
 		theme: ThemePref::DARK,
 		playlists: init_playlist_from_filepath(""),
 		default_on_finish: LoopBehavior::Stop,
 		default_volume: DEFAULT_VOLUME,
+		shuffle_memory: 3,
 	}
 }
 
@@ -331,6 +335,8 @@ struct MyApp {
 	save_err: SaveError,
 
 	pinned_mode: bool,
+	shuffle_memory: usize,
+	shuffle_memory_text: String,
 }
 
 #[derive(Clone)]
@@ -340,7 +346,7 @@ struct RodioData {
 	is_paused: bool,
 	song_name: String,
 	error_message: Option<String>,
-	history_buffer_size: usize,
+	shuffle_memory: usize,
 }
 
 enum MessageToGui {
@@ -667,7 +673,7 @@ fn audio_thread_loop(
 	let mut song_play_err = None;
 	let mut seeking = false;
 	let mut paused_from_seeking = false;
-	let randomization_memory = 5;
+	let mut randomization_memory = 5;
 
 	let mut history_buffer = new_ring_buffer(255);
 
@@ -720,7 +726,7 @@ fn audio_thread_loop(
 						is_paused: audio_thread_data.sink.is_paused(),
 						song_name: song_path.clone(),
 						error_message: song_play_err.clone(),
-						history_buffer_size: history_buffer.vec.len(),
+						shuffle_memory: randomization_memory,
 					}));
 					send_cvar.notify_one();
 				},
@@ -866,8 +872,8 @@ fn audio_thread_loop(
 						}
 					}
 				},
-				MessageToAudio::UpdateHistoryBufferSize(new_size) => {
-					history_buffer = new_ring_buffer(new_size);
+				MessageToAudio::UpdateShuffleMemory(mem) => {
+					randomization_memory = mem;
 				},
 			}
 		}
@@ -905,7 +911,7 @@ fn request_rodio_data(send_pair: &Arc<(Mutex<Vec<MessageToAudio>>, Condvar)>, re
 		song_name: "".to_string(),
 		is_paused: false,
 		error_message: None,
-		history_buffer_size: 0,
+		shuffle_memory: 0,
 	};
 	// vec = if let Ok(mut vec) 
 }
@@ -938,7 +944,7 @@ enum MessageToAudio {
 	SetSongCollection(Vec<String>, Option<usize>),
 	ClearError,
 	PreviousSong,
-	UpdateHistoryBufferSize(usize),
+	UpdateShuffleMemory(usize),
 }
 
 fn str_to_theme_preference(string: &str) -> ThemePref {
@@ -1005,6 +1011,7 @@ fn find_persistent_data() -> (PersistentData, String) {
 				let hide_dirs_identifier = "Hide Directories: "; 
 				let default_end_behavior_identifier = "Default End Behavior: "; 
 				let default_volume_identifier = "Default Volume: ";
+				let shuffle_memory_identifier = "Shuffle Memory: ";
 				if line.starts_with(theme_identifier) {
 					persistent_data.theme = str_to_theme_preference(&line[theme_identifier.len()..]);
 				} else if line.starts_with(default_directory_identifier) {
@@ -1037,6 +1044,8 @@ fn find_persistent_data() -> (PersistentData, String) {
 					}
 				} else if line.starts_with(default_volume_identifier) {
 					persistent_data.default_volume = line[default_volume_identifier.len()..].parse().unwrap_or(DEFAULT_VOLUME);
+				} else if line.starts_with(shuffle_memory_identifier) {
+					persistent_data.shuffle_memory = line[shuffle_memory_identifier.len()..].parse().unwrap_or(3);
 				}
 			}
 			else if current_state == State::Playlists {
@@ -1121,12 +1130,15 @@ impl Default for MyApp {
 		init_directory_at_filepath(&persistent_data.default_directory, &mut dir_map);
 
 		let start_mode = if persistent_data.data_file_exists {
-			let target_exe_path = build_full_filepath(&installed_location, "pinetree.exe");
-
-			if let Ok(current_exe) = std::env::current_exe() {
-				if let Ok(_) = std::fs::copy(&current_exe, &target_exe_path) {
-					// Nothing: Success
-					// Continue as normal
+			if persistent_data.data_file_version != CURRENT_VERSION {
+				println!("Updating executable");
+				let target_exe_path = build_full_filepath(&installed_location, "pinetree.exe");
+	
+				if let Ok(current_exe) = std::env::current_exe() {
+					if let Ok(_) = std::fs::copy(&current_exe, &target_exe_path) {
+						// Nothing: Success
+						// Continue as normal
+					}
 				}
 			}
 			CentralPanelMode::Settings
@@ -1174,6 +1186,8 @@ impl Default for MyApp {
 			audio_message_channel: gui_thread_send,
 			audio_receive_channel: gui_thread_recieve,
 			hide_fp: persistent_data.hide_directories_by_default.clone(),
+			shuffle_memory: persistent_data.shuffle_memory,
+			shuffle_memory_text: format!("{}", persistent_data.shuffle_memory),
 			persistent_data: persistent_data,
 
 			central_panel_mode: start_mode,
@@ -1779,46 +1793,30 @@ fn write_internal_data(path: &str, persistent_data: &PersistentData) -> Result<(
 	use std::io::prelude::*;
 	let file = std::fs::File::create(path);
 	if let Ok(mut file) = file {
-		file.write_all("VERSION: OPEN BETA 4.5".as_bytes())?;
-		file.write_all("\n".as_bytes())?;
-		
-		file.write_all("SETTINGS\n".as_bytes())?;
-		file.write_all("Theme: ".as_bytes())?;
-		file.write_all(theme_to_str(&persistent_data.theme).as_bytes())?;
-		file.write_all("\n".as_bytes())?;
+		let mut data_to_write = String::new();
+		data_to_write = format!("VERSION: {}\n", CURRENT_VERSION);
 
-		file.write_all("Default Directory: ".as_bytes())?;
-		file.write_all(persistent_data.default_directory.as_bytes())?;
-		file.write_all("\n".as_bytes())?;
+		data_to_write = format!("{}{}", data_to_write, "SETTINGS\n");
+		data_to_write = format!("{}Theme: {}\n", data_to_write, theme_to_str(&persistent_data.theme));
+		data_to_write = format!("{}Default Directory: {}\n", data_to_write, persistent_data.default_directory);
+		data_to_write = format!("{}Default End Behavior: {}\n", data_to_write, default_on_finish_to_str(&persistent_data.default_on_finish));
+		data_to_write = format!("{}Default Volume: {}\n", data_to_write, persistent_data.default_volume.to_string());
+		data_to_write = format!("{}Hide Directories: {}\n", data_to_write, 
+			if persistent_data.hide_directories_by_default {"true"}
+			else {"false"}
+		);
+		data_to_write = format!("{}Shuffle Memory: {}\n", data_to_write, persistent_data.shuffle_memory);
 
-		file.write_all("Default End Behavior: ".as_bytes())?;
-		file.write_all(default_on_finish_to_str(&persistent_data.default_on_finish).as_bytes())?;
-		file.write_all("\n".as_bytes())?;
+		data_to_write = format!("{}{}", data_to_write, "PLAYLISTS\n");
 
-		file.write_all("Default Volume: ".as_bytes())?;
-		file.write_all(persistent_data.default_volume.to_string().as_bytes())?;
-		file.write_all("\n".as_bytes())?;
-
-		file.write_all("Hide Directories: ".as_bytes())?;
-		let stow = if persistent_data.hide_directories_by_default {
-			"true"
-		} else {
-			"false"
-		};
-		file.write_all(stow.as_bytes())?;
-		file.write_all("\n".as_bytes())?;
-
-		file.write_all("PLAYLISTS\n".as_bytes())?;
 		for playlist in &persistent_data.playlists {
-			file.write_all("Playlist: ".as_bytes())?;
-			file.write_all(playlist.name.as_bytes())?;
-			file.write_all("\n".as_bytes())?;
+			data_to_write = format!("{}Playlist: {}\n", data_to_write, playlist.name);
 			
 			for song in &playlist.songs {
-				file.write_all(song.as_bytes())?;
-				file.write_all("\n".as_bytes())?;
+				data_to_write = format!("{}{}\n", data_to_write, song);
 			}
 		}
+		file.write_all(data_to_write.as_bytes())?;
 	}
 	return Ok(());
 }
@@ -3114,11 +3112,23 @@ impl eframe::App for MyApp {
 							self.persistent_data.default_volume = self.song_volume;
 						}
 					});
-					// ui.horizontal(|ui| {
-					// 	ui.label("History buffer size: ");
-					// 	let mut size = audio_data.history_buffer_size;
-					// 	ui.text_edit_singleline(format!("{}", size));
-					// });
+					ui.horizontal(|ui| {
+						ui.label("Shuffle memory: ");
+						let mut audio_thread_sm = audio_data.shuffle_memory;
+
+						let response = ui.add(egui::TextEdit::singleline(&mut self.shuffle_memory_text).desired_width(24.0));
+						self.shuffle_memory_text.retain(|c| c.is_ascii_digit());
+						if response.lost_focus() && self.shuffle_memory_text.len() == 0 {
+							self.shuffle_memory_text = format!("0");
+						}
+						if let Ok(new_value) = self.shuffle_memory_text.parse::<usize>() {
+							self.persistent_data.shuffle_memory = new_value;
+							self.shuffle_memory = new_value;
+							if new_value != audio_thread_sm {
+								send_audio_signal(&self.audio_message_channel, MessageToAudio::UpdateShuffleMemory(self.shuffle_memory));
+							}
+						}
+					});
 					#[cfg(target_os = "windows")] {
 						ui.horizontal(|ui| {
 							use windows_sys::Win32::Foundation::HWND;
@@ -3137,6 +3147,14 @@ impl eframe::App for MyApp {
 								}
 							}
 						});
+					}
+					#[cfg(target_family = "unix")] {
+						ui.horizontal(|ui| {
+							ui.disable();
+							
+							ui.label("Pin window to top: ");
+							if ui.checkbox(&mut self.pinned_mode, "").clicked() {}
+						}).response.on_hover_text_at_pointer("This option is not supported on Linux - certain window managers do not support this.");
 					}
 					
 					if ui.button("Save").clicked() {
