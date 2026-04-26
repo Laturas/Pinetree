@@ -541,11 +541,11 @@ fn new_ring_buffer(capacity: usize) -> SongRingBuffer {
       ^Back ^Front
 */
 fn push_to_ring_buffer(buffer: &mut SongRingBuffer, element: &str) {
-	if ((buffer.front + 1) % buffer.vec.capacity()) == buffer.back {
-		buffer.back = (buffer.back + 1) % buffer.vec.capacity();
+	if ((buffer.front + 1) % buffer.vec.len()) == buffer.back {
+		buffer.back = (buffer.back + 1) % buffer.vec.len();
 	}
 	buffer.vec[buffer.front] = element.to_string();
-	buffer.front = (buffer.front + 1) % buffer.vec.capacity();
+	buffer.front = (buffer.front + 1) % buffer.vec.len();
 }
 
 /**
@@ -555,7 +555,7 @@ fn try_go_to_previous_song(buffer: &mut SongRingBuffer) -> bool {
 	if buffer.current_element == buffer.back {
 		return false;
 	} else {
-		let cap = buffer.vec.capacity();
+		let cap = buffer.vec.len();
 		buffer.current_element = (buffer.current_element + cap - 1) % cap;
 		return true;
 	}
