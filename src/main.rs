@@ -29,6 +29,14 @@ enum LoopBehavior {
 
 #[derive(PartialEq)]
 #[derive(Clone)]
+#[derive(Copy)]
+enum PrevBehavior {
+	History,
+	Above,
+}
+
+#[derive(PartialEq)]
+#[derive(Clone)]
 enum LeftPanelMode {
 	Files,
 	Playlists,
@@ -115,6 +123,7 @@ struct PersistentData {
 	default_on_finish: LoopBehavior,
 	default_volume: f32,
 	shuffle_memory: usize,
+	prev_behavior: PrevBehavior,
 }
 
 fn default_persistent_data() -> PersistentData {
@@ -128,6 +137,7 @@ fn default_persistent_data() -> PersistentData {
 		default_on_finish: LoopBehavior::Stop,
 		default_volume: DEFAULT_VOLUME,
 		shuffle_memory: 3,
+		prev_behavior: PrevBehavior::History,
 	}
 }
 
@@ -337,6 +347,8 @@ struct MyApp {
 	pinned_mode: bool,
 	shuffle_memory: usize,
 	shuffle_memory_text: String,
+
+	prev_behavior: PrevBehavior,
 }
 
 #[derive(Clone)]
@@ -674,6 +686,7 @@ fn audio_thread_loop(
 	let mut seeking = false;
 	let mut paused_from_seeking = false;
 	let mut randomization_memory = 5;
+	let mut prev_behavior: PrevBehavior = PrevBehavior::Above;
 
 	let mut history_buffer = new_ring_buffer(255);
 
@@ -857,24 +870,55 @@ fn audio_thread_loop(
 					song_play_err = None;
 				},
 				MessageToAudio::PreviousSong => {
-					if try_go_to_previous_song(&mut history_buffer) {
-						let song = history_buffer.vec[history_buffer.current_element].clone();
-						song_play_err = play_song(false, &song, &mut song_path, &mut history_buffer, &mut audio_thread_data, &recieve_pair);
-						if song_play_err.is_none() {
-							update_timestamps(&song_path, &mut song_length, &mut current_timestamp, &mut saved_timestamp);
-							song_index = 0;
-							for i in 0..current_songs_collection.len() {
-								if let Some(e) = current_songs_collection.get(i) && *e == song {
-									song_index = i;
-									break;
+					match prev_behavior {
+						PrevBehavior::Above => {
+							let mut prev_song: Option<String> = None;
+							let mut push_to_history = false;
+							if current_songs_collection.len() > 0 {
+								song_index = (song_index + current_songs_collection.len() - 1) % current_songs_collection.len() as usize;
+
+								if let Some(song) = current_songs_collection.get(song_index) {
+									push_to_history = true;
+									prev_song = Some(song.clone());
 								}
 							}
-						}
+							if let Some(song) = prev_song {
+								song_play_err = play_song(push_to_history, &song, &mut song_path, &mut history_buffer, &mut audio_thread_data, &recieve_pair);
+								if song_play_err.is_none() {
+									update_timestamps(&song_path, &mut song_length, &mut current_timestamp, &mut saved_timestamp);
+								}
+							} else {
+								song_length = 1;
+								song_path = "".to_string();
+								current_timestamp = 0;
+								saved_timestamp = None;
+							}
+						},
+						PrevBehavior::History => {
+							if try_go_to_previous_song(&mut history_buffer) {
+								let song = history_buffer.vec[history_buffer.current_element].clone();
+								song_play_err = play_song(false, &song, &mut song_path, &mut history_buffer, &mut audio_thread_data, &recieve_pair);
+								if song_play_err.is_none() {
+									update_timestamps(&song_path, &mut song_length, &mut current_timestamp, &mut saved_timestamp);
+									song_index = 0;
+									for i in 0..current_songs_collection.len() {
+										if let Some(e) = current_songs_collection.get(i) && *e == song {
+											song_index = i;
+											break;
+										}
+									}
+								}
+							}
+						},
 					}
+					
 				},
 				MessageToAudio::UpdateShuffleMemory(mem) => {
 					randomization_memory = mem;
 				},
+				MessageToAudio::UpdatePrevBehavior(new_behavior) => {
+					prev_behavior = new_behavior;
+				}
 			}
 		}
 		// If this unwrap fails, it should crash.
@@ -945,6 +989,7 @@ enum MessageToAudio {
 	ClearError,
 	PreviousSong,
 	UpdateShuffleMemory(usize),
+	UpdatePrevBehavior(PrevBehavior),
 }
 
 fn str_to_theme_preference(string: &str) -> ThemePref {
@@ -1012,6 +1057,7 @@ fn find_persistent_data() -> (PersistentData, String) {
 				let default_end_behavior_identifier = "Default End Behavior: "; 
 				let default_volume_identifier = "Default Volume: ";
 				let shuffle_memory_identifier = "Shuffle Memory: ";
+				let prev_behavior_identifier= "Default Prev Behavior: ";
 				if line.starts_with(theme_identifier) {
 					persistent_data.theme = str_to_theme_preference(&line[theme_identifier.len()..]);
 				} else if line.starts_with(default_directory_identifier) {
@@ -1046,6 +1092,16 @@ fn find_persistent_data() -> (PersistentData, String) {
 					persistent_data.default_volume = line[default_volume_identifier.len()..].parse().unwrap_or(DEFAULT_VOLUME);
 				} else if line.starts_with(shuffle_memory_identifier) {
 					persistent_data.shuffle_memory = line[shuffle_memory_identifier.len()..].parse().unwrap_or(3);
+				} else if line.starts_with(prev_behavior_identifier) {
+					match &line[prev_behavior_identifier.len()..] {
+						"Above" => {
+							persistent_data.prev_behavior = PrevBehavior::Above;
+						},
+						"History" => {
+							persistent_data.prev_behavior = PrevBehavior::History;
+						},
+						_ => {},
+					}
 				}
 			}
 			else if current_state == State::Playlists {
@@ -1188,6 +1244,8 @@ impl Default for MyApp {
 			hide_fp: persistent_data.hide_directories_by_default.clone(),
 			shuffle_memory: persistent_data.shuffle_memory,
 			shuffle_memory_text: format!("{}", persistent_data.shuffle_memory),
+			prev_behavior: persistent_data.prev_behavior,
+
 			persistent_data: persistent_data,
 
 			central_panel_mode: start_mode,
@@ -1789,6 +1847,17 @@ fn default_on_finish_to_str(behavior: &LoopBehavior) -> &'static str {
 	}
 }
 
+fn prev_behavior_to_str(p: &PrevBehavior) -> &str {
+	return match *p {
+		PrevBehavior::Above => {
+			"Above"
+		},
+		PrevBehavior::History => {
+			"History"
+		},
+	};
+}
+
 fn write_internal_data(path: &str, persistent_data: &PersistentData) -> Result<(), Box<dyn std::error::Error>>{
 	use std::io::prelude::*;
 	let file = std::fs::File::create(path);
@@ -1800,6 +1869,7 @@ fn write_internal_data(path: &str, persistent_data: &PersistentData) -> Result<(
 		data_to_write = format!("{}Theme: {}\n", data_to_write, theme_to_str(&persistent_data.theme));
 		data_to_write = format!("{}Default Directory: {}\n", data_to_write, persistent_data.default_directory);
 		data_to_write = format!("{}Default End Behavior: {}\n", data_to_write, default_on_finish_to_str(&persistent_data.default_on_finish));
+		data_to_write = format!("{}Default Prev Behavior: {}\n", data_to_write, prev_behavior_to_str(&persistent_data.prev_behavior));
 		data_to_write = format!("{}Default Volume: {}\n", data_to_write, persistent_data.default_volume.to_string());
 		data_to_write = format!("{}Hide Directories: {}\n", data_to_write, 
 			if persistent_data.hide_directories_by_default {"true"}
@@ -1990,6 +2060,7 @@ impl eframe::App for MyApp {
 			add_font(ctx);
 			send_audio_signal(&self.audio_message_channel, MessageToAudio::UpdateEndBehavior(clone_loop_behavior(&self.loop_behavior)));
 			send_audio_signal(&self.audio_message_channel, MessageToAudio::UpdateVolume(volume_curve(self.song_volume)));
+			send_audio_signal(&self.audio_message_channel, MessageToAudio::UpdatePrevBehavior(self.prev_behavior));
 		}
 		// 8 fps
 		let audio_data = request_rodio_data(&mut self.audio_message_channel, &mut self.audio_receive_channel);
@@ -2232,6 +2303,30 @@ impl eframe::App for MyApp {
 						if ctx.input(|i| i.key_pressed(egui::Key::F) && i.modifiers.ctrl) {
 							response.request_focus();
 						}
+
+						if response.lost_focus() && response.ctx.input(|i| i.key_pressed(egui::Key::Enter)) {
+							if let Some(rawtree) = &self.directory_tree {
+								if let Some(tree) = &self.searched_directory_tree {
+									if let Some(index) = tree.get(0)
+									&& let Some(thing) = rawtree.get(*index) {
+										if thing.is_dir {
+											file_action = FileActions::EnterDirectory(thing.name.clone());
+										} else {
+											file_action = FileActions::PlaySong(thing.name.clone());
+										}
+									}
+								} else {
+									if let Some(thing) = rawtree.get(0) {
+										if thing.is_dir {
+											file_action = FileActions::EnterDirectory(thing.name.clone());
+										} else {
+											file_action = FileActions::PlaySong(thing.name.clone());
+										}
+									}
+								}
+								response.request_focus();
+							}
+						}
 		
 						if self.search_text == "" {
 							self.searched_directory_tree = None;
@@ -2253,6 +2348,7 @@ impl eframe::App for MyApp {
 							self.searched_directory_tree = None;
 							self.active_directory_filepath = self.current_song_folder.clone();
 							self.active_search_text = "".to_string();
+							self.search_text = "".to_string();
 							request_refresh = true;
 						}
 						ui.label(egui::RichText::new(extract_folder_name(&self.active_directory_filepath)).strong());
@@ -2296,7 +2392,10 @@ impl eframe::App for MyApp {
 								};
 							}
 						}
-						file_action = render_directory_elements(ui, &self.directory_tree, &self.searched_directory_tree, &audio_data.song_name, &self.edit_playlist_data);
+						let faction = render_directory_elements(ui, &self.directory_tree, &self.searched_directory_tree, &audio_data.song_name, &self.edit_playlist_data);
+						if file_action == FileActions::None {
+							file_action = faction;
+						}
 					} else {
 						ui.label("Error: Directory does not exist");
 					}
@@ -2340,6 +2439,30 @@ impl eframe::App for MyApp {
 		
 						if ctx.input(|i| i.key_pressed(egui::Key::F) && i.modifiers.ctrl) {
 							response.request_focus();
+						}
+
+						if response.lost_focus() && response.ctx.input(|i| i.key_pressed(egui::Key::Enter)) {
+							if let Some(rawtree) = &self.playlist_tree {
+								if let Some(tree) = &self.searched_playlist_tree {
+									if let Some(index) = tree.get(0)
+									&& let Some(thing) = rawtree.get(*index) {
+										if let Some(song_name) = &thing.song_name {
+											file_action = FileActions::PlaySong(song_name.clone());
+										} else {
+											file_action = FileActions::EnterPlaylist(thing.playlist_position);
+										}
+									}
+								} else {
+									if let Some(thing) = rawtree.get(0) {
+										if let Some(song_name) = &thing.song_name {
+											file_action = FileActions::PlaySong(song_name.clone());
+										} else {
+											file_action = FileActions::EnterPlaylist(thing.playlist_position);
+										}
+									}
+								}
+								response.request_focus();
+							}
 						}
 		
 						if self.search_text == "" {
@@ -2416,6 +2539,7 @@ impl eframe::App for MyApp {
 						ui.add_space(5.0);
 						ui.horizontal(|ui| {
 							if ui.button("Go back").clicked() {
+								self.search_text = "".to_string();
 								request_refresh = true;
 							}
 							if ui.button("Edit songs").clicked() {
@@ -2454,10 +2578,16 @@ impl eframe::App for MyApp {
 							}
 						}
 						if let Some(edit_playlist_data) = &mut self.edit_playlist_data {
-							file_action = render_playlist_reordering(ui, &audio_data.song_name, edit_playlist_data);
+							let faction = render_playlist_reordering(ui, &audio_data.song_name, edit_playlist_data);
+							if file_action == FileActions::None {
+								file_action = faction;
+							}
 						} else {
 							let song_depth = if let Some(_) = self.active_playlist_index {0} else {1};
-							file_action = render_playlist_elements(ui, &self.playlist_tree, &self.searched_playlist_tree, &self.persistent_data.playlists, song_depth, &audio_data.song_name);
+							let faction = render_playlist_elements(ui, &self.playlist_tree, &self.searched_playlist_tree, &self.persistent_data.playlists, song_depth, &audio_data.song_name);
+							if file_action == FileActions::None {
+								file_action = faction;
+							}
 						}
 					} else {
 						ui.label("No saved playlists found");
@@ -3085,6 +3215,29 @@ impl eframe::App for MyApp {
 						);
 					});
 					ui.horizontal(|ui| {
+						ui.label("Previous Song Behavior:");
+						egui::ComboBox::from_label("   ")
+							.selected_text(
+								match self.persistent_data.prev_behavior {
+									PrevBehavior::Above => {
+										"Go Up Song List"
+									},
+									PrevBehavior::History => {
+										"Previously Listened"
+									}
+								}
+							)
+							.show_ui(ui, |ui| {
+								ui.selectable_value(&mut self.persistent_data.prev_behavior, PrevBehavior::Above, "Go Up Song List");
+								ui.selectable_value(&mut self.persistent_data.prev_behavior, PrevBehavior::History, "Previously Listened");
+							}
+						);
+						if self.persistent_data.prev_behavior != self.prev_behavior {
+							self.prev_behavior = self.persistent_data.prev_behavior;
+							send_audio_signal(&self.audio_message_channel, MessageToAudio::UpdatePrevBehavior(self.prev_behavior));
+						}
+					});
+					ui.horizontal(|ui| {
 						if !self.hide_fp {
 							ui.label("Default Folder: ");
 							ui.text_edit_singleline(&mut self.persistent_data.default_directory);
@@ -3114,7 +3267,7 @@ impl eframe::App for MyApp {
 					});
 					ui.horizontal(|ui| {
 						ui.label("Shuffle memory: ");
-						let mut audio_thread_sm = audio_data.shuffle_memory;
+						let audio_thread_sm = audio_data.shuffle_memory;
 
 						let response = ui.add(egui::TextEdit::singleline(&mut self.shuffle_memory_text).desired_width(24.0));
 						self.shuffle_memory_text.retain(|c| c.is_ascii_digit());
