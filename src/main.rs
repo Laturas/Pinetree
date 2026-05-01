@@ -14,6 +14,7 @@ use std::panic;
 
 use eframe::egui;
 
+use egui::{InputState, Key};
 use rodio;
 
 /* Exists because rodio is terrible */
@@ -1515,7 +1516,6 @@ fn get_dir_tree_elements(output_vec: &mut Vec<DirTreeElement>, directory_string:
 }
 
 pub const REFRESH: egui::KeyboardShortcut = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::R);
-pub const SEARCH: egui::KeyboardShortcut = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::F);
 pub const PAUSE: egui::KeyboardShortcut = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::P);
 pub const PREV_SONG: egui::KeyboardShortcut = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::ArrowLeft);
 pub const NEXT_SONG: egui::KeyboardShortcut = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::ArrowRight);
@@ -2050,6 +2050,52 @@ fn set_pin_mode(hwnd: windows_sys::Win32::Foundation::HWND, pin: bool) {
     }
 }
 
+fn is_user_typing(ui: &mut egui::Ui) -> bool {
+	let mut res = false;
+	ui.input(|i| {
+		for event in &i.events {
+			if let egui::Event::Text(text) = event && !res{
+				res = text.len() > 0;
+			}
+		}
+	});
+	return res;
+} 
+
+fn search_bar(ui: &mut egui::Ui, ctx: &egui::Context, search_text: &mut String) -> egui::Response {
+	let response = ui.add(egui::TextEdit::singleline(search_text)
+		.hint_text("Search..."))
+		.on_hover_text("Searches based on the file name");
+
+	let mut focused = false;
+	ctx.memory( |memory| {
+		focused = memory.focused().is_some();
+	});
+	
+	if is_user_typing(ui) && !focused {
+		/* Getting this shit to work was S tier ragebait */
+		/* By default requesting focus in egui sets the cursor to the *beginning* of the text edit - not the end. */
+		ui.input(|i| {
+			for event in &i.events {
+				if let egui::Event::Text(text) = event {
+					*search_text = format!("{}{}", search_text, text);
+				}
+			}
+		});
+		let mut state = egui::TextEdit::load_state(ui.ctx(), response.id).unwrap_or_default();
+		let end_pos = search_text.chars().count();
+		state.cursor.set_char_range(Some(egui::text::CCursorRange::one(egui::text::CCursor::new(end_pos))));
+		state.store(ui.ctx(), response.id);
+	}
+
+	let to_req = (is_user_typing(ui) && !focused) || ui.input(|i| i.modifiers.ctrl && i.key_pressed(egui::Key::F));
+
+	if to_req {
+		response.request_focus();
+	}
+	return response;
+}
+
 impl eframe::App for MyApp {
 	fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
 		if !self.first_frame_rendered {
@@ -2296,13 +2342,7 @@ impl eframe::App for MyApp {
 					}
 
 					ui.horizontal(|ui| {
-						let response = ui.add(egui::TextEdit::singleline(&mut self.search_text)
-							.hint_text("Search..."))
-							.on_hover_text("Searches based on the file name");
-		
-						if ctx.input(|i| i.key_pressed(egui::Key::F) && i.modifiers.ctrl) {
-							response.request_focus();
-						}
+						let response = search_bar(ui, ctx, &mut self.search_text);
 
 						if response.lost_focus() && response.ctx.input(|i| i.key_pressed(egui::Key::Enter)) {
 							if let Some(rawtree) = &self.directory_tree {
@@ -2342,6 +2382,7 @@ impl eframe::App for MyApp {
 							.on_hover_text("Searches based on the artist name");
 					}
 					ui.horizontal(|ui| {
+						ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
 						if ui.button("↑").clicked() {
 							self.current_song_folder = song_folder_go_up(&self.current_song_folder);
 							self.directory_tree = None;
@@ -2384,7 +2425,7 @@ impl eframe::App for MyApp {
 									let mut vec = Vec::<usize>::new();
 									for i in 0..directory_tree_elements.len() {
 										if let Some(element) = directory_tree_elements.get(i)
-										&& element.name.to_lowercase().contains(&compare_to) {
+										&& extract_file_name(&element.name.to_lowercase()).contains(&compare_to) {
 											vec.push(i);
 										}
 									}
@@ -2433,13 +2474,7 @@ impl eframe::App for MyApp {
 					}
 
 					ui.horizontal(|ui| {
-						let response = ui.add(egui::TextEdit::singleline(&mut self.search_text)
-							.hint_text("Search..."))
-							.on_hover_text("Searches based on the file name");
-		
-						if ctx.input(|i| i.key_pressed(egui::Key::F) && i.modifiers.ctrl) {
-							response.request_focus();
-						}
+						let response = search_bar(ui, ctx, &mut self.search_text);
 
 						if response.lost_focus() && response.ctx.input(|i| i.key_pressed(egui::Key::Enter)) {
 							if let Some(rawtree) = &self.playlist_tree {
@@ -2566,7 +2601,7 @@ impl eframe::App for MyApp {
 								let mut tmp_vec = Vec::<usize>::new();
 								let mut position = 0;
 								for element in playlist_tree {
-									if let Some(name) = &element.song_name && name.to_lowercase().contains(&compare_to) {
+									if let Some(name) = &element.song_name && extract_file_name(&name.to_lowercase()).contains(&compare_to) {
 										tmp_vec.push(position);
 									} else if let Some(playlist) = self.persistent_data.playlists.get(element.playlist_position)
 									&& playlist.name.to_lowercase().contains(&compare_to) {
@@ -2630,13 +2665,7 @@ impl eframe::App for MyApp {
 					});
 
 					ui.horizontal(|ui| {
-						let response = ui.add(egui::TextEdit::singleline(&mut self.search_text)
-							.hint_text("Search..."))
-							.on_hover_text("Searches based on the file name");
-		
-						if ctx.input(|i| i.key_pressed(egui::Key::F) && i.modifiers.ctrl) {
-							response.request_focus();
-						}
+						let _ = search_bar(ui, ctx, &mut self.search_text);
 		
 						if self.search_text == "" {
 							self.searched_directory_tree = None;
@@ -2759,7 +2788,7 @@ impl eframe::App for MyApp {
 										let mut vec = Vec::<usize>::new();
 										for i in 0..directory_tree_elements.len() {
 											if let Some(element) = directory_tree_elements.get(i)
-											&& element.name.to_lowercase().contains(&compare_to) {
+											&& extract_file_name(&element.name.to_lowercase()).contains(&compare_to) {
 												vec.push(i);
 											}
 										}
