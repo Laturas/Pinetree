@@ -1,20 +1,32 @@
 [package]
 name = "pinetree"
-version = "1.1.0"
-edition = "2021"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
-[profile.release]
-strip = true  # Automatically strip symbols from the binary.
-lto = true
-panic = "abort"
+version = "2.4.5"
+edition = "2024"
 
 [dependencies]
 eframe = "0.29.1"
+raw-window-handle = "0.6"
 egui = "0.29.1"
+winit = "0.30.12"
 mp3-duration = "0.1.10"
-rodio = "0.20.*"
-rand = "0.8"
-id3 = "1.16.0"
-image = "0.24.2"
+rodio = { path = "./modded_rodio" }
+
+[target.'cfg(windows)'.build-dependencies]
+winres = "0.1"
+
+[package.metadata.winres]
+
+# [profile.release]
+# strip = true  # Automatically strip symbols from the binary.
+# lto = true
+# panic = "abort"
+# codegen-units = 1
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = ">= 0.59.0", features = [
+    "Win32_UI_Shell",
+    "Win32_Globalization",
+    "Win32_System_Com",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_Foundation"
+] }
