@@ -5,6 +5,8 @@
  * 
  * by Katelyn Doucette
  */
+mod audio_frontend;
+mod playback_engine;
 
 use std::sync::{Arc, Mutex, Condvar};
 use std::thread;
@@ -13,7 +15,6 @@ use std::io::BufRead;
 use std::panic;
 
 use eframe::egui;
-mod audio_frontend;
 use audio_frontend::*;
 
 

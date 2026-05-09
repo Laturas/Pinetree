@@ -1,9 +1,8 @@
-use rodio;
 use std::{time, u128};
 
 /* Exists because rodio is terrible */
 use mp3_duration;
-
+use crate::playback_engine::*;
 
 #[derive(PartialEq)]
 pub enum LoopBehavior {
@@ -109,7 +108,7 @@ impl Iterator for EndCallback {
     }
 }
 
-impl Source for EndCallback {
+impl rodio::Source for EndCallback {
     fn current_frame_len(&self) -> Option<usize> { None }
     fn channels(&self) -> u16 { 2 }
     fn sample_rate(&self) -> u32 { 44100 }
@@ -120,12 +119,8 @@ struct AudioThreadData {
 	// This has to exist even if unused, otherwise the lifetime causes the program to crash
 	_stream: rodio::OutputStream,
 	sink: rodio::Sink,
-	volume: f32,
-	speed: f32,
-	end_behavior: LoopBehavior,
 }
 
-use rodio::Source;
 use std::time::{Duration, SystemTime};
 
 /**
@@ -336,6 +331,14 @@ pub fn volume_curve(input: f32) -> f32 {
 	return (input * 6.908).exp() / 1000.0
 }
 
+fn set_volume(audio_data: &mut AudioThreadData, new_volume: f32) {
+	audio_data.sink.set_volume(new_volume);
+}
+
+fn set_speed(audio_data: &mut AudioThreadData, new_speed: f32) {
+	audio_data.sink.set_speed(new_speed);
+}
+
 /**
 * Audio thread maintains its own list it works on, going through each element in that during the "Next".
 * 
@@ -360,11 +363,11 @@ pub fn audio_thread_loop(
 		// This has to exist even if unused, otherwise the lifetime causes the program to crash
 		_stream: output_stream,
 		sink: rodio::Sink::try_new(&audio_sink).unwrap(),
-		volume: volume_curve(DEFAULT_VOLUME),
-		speed: DEFAULT_SPEED,
-		end_behavior: LoopBehavior::Stop,
 	};
-	audio_thread_data.sink.set_volume(audio_thread_data.volume);
+	let mut volume = volume_curve(DEFAULT_VOLUME);
+	let mut speed = DEFAULT_SPEED;
+	let mut end_behavior = LoopBehavior::Stop;
+	set_volume(&mut audio_thread_data, volume);
 	let lock = &recieve_pair.0;
 	let cvar = &recieve_pair.1;
 	let mut data_vec = lock.lock().unwrap();
@@ -399,23 +402,23 @@ pub fn audio_thread_loop(
 					}
 				},
 				MessageToAudio::UpdateEndBehavior(loop_behavior) => {
-					audio_thread_data.end_behavior = clone_loop_behavior(&loop_behavior);
+					end_behavior = clone_loop_behavior(&loop_behavior);
 				},
-				MessageToAudio::UpdateVolume(volume) => {
-					audio_thread_data.volume = volume;
-					audio_thread_data.sink.set_volume(audio_thread_data.volume);
+				MessageToAudio::UpdateVolume(new_volume) => {
+					volume = new_volume;
+					set_volume(&mut audio_thread_data, volume);
 				},
-				MessageToAudio::UpdateSpeed(speed) => {
+				MessageToAudio::UpdateSpeed(new_speed) => {
 					if let Some(ts) = saved_timestamp && let Ok(a) = ts.elapsed() {
-						current_timestamp += (a.as_micros() as f32 * audio_thread_data.speed) as u128;
+						current_timestamp += (a.as_micros() as f32 * speed) as u128;
 						saved_timestamp = Some(time::SystemTime::now());
 					}
-					audio_thread_data.speed = speed;
-					audio_thread_data.sink.set_speed(speed);
+					speed = new_speed;
+					set_speed(&mut audio_thread_data, new_speed);
 				},
 				MessageToAudio::RequestRodioData => {
 					if let Some(ts) = saved_timestamp && let Ok(a) = ts.elapsed() {
-						current_timestamp += (a.as_micros() as f32 * audio_thread_data.speed) as u128;
+						current_timestamp += (a.as_micros() as f32 * speed) as u128;
 						saved_timestamp = Some(time::SystemTime::now());
 					}
 
@@ -435,7 +438,7 @@ pub fn audio_thread_loop(
 				MessageToAudio::Seek(position) => {
 					seeking = true;
 					if !audio_thread_data.sink.empty() {
-						let seek_time_ms: u64 = (position as f32 / audio_thread_data.speed) as u64;
+						let seek_time_ms: u64 = (position as f32 / speed) as u64;
 						if (song_length as u64).saturating_sub(seek_time_ms) < 1000 {
 							if !audio_thread_data.sink.is_paused() && !paused_from_seeking {
 								paused_from_seeking = true;
@@ -468,7 +471,7 @@ pub fn audio_thread_loop(
 						audio_thread_data.sink.play();
 					} else {
 						if let Some(ts) = saved_timestamp && let Ok(a) = ts.elapsed() {
-							current_timestamp += (a.as_micros() as f32 * audio_thread_data.speed) as u128;
+							current_timestamp += (a.as_micros() as f32 * speed) as u128;
 							saved_timestamp = None;
 						}
 						audio_thread_data.sink.pause();
@@ -476,7 +479,7 @@ pub fn audio_thread_loop(
 				},
 				MessageToAudio::SongEnd => {
 					audio_thread_data.sink.clear();
-					match audio_thread_data.end_behavior {
+					match end_behavior {
 						LoopBehavior::Stop => {
 							song_path = "".to_string();
 
