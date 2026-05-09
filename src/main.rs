@@ -1,40 +1,21 @@
 #![windows_subsystem = "windows"]
 
 /**
- * Pinetree MP3 Player Version 2 Internal Source Code
+ * Pinetree front-end layer. Handles integration with egui.
  * 
  * by Katelyn Doucette
  */
 
 use std::sync::{Arc, Mutex, Condvar};
-use std::{thread, time, u128};
+use std::thread;
 use std::collections::HashMap;
 use std::io::BufRead;
 use std::panic;
 
 use eframe::egui;
+mod audio_frontend;
+use audio_frontend::*;
 
-use egui::{InputState, Key};
-use rodio;
-
-/* Exists because rodio is terrible */
-use mp3_duration;
-
-#[derive(PartialEq)]
-enum LoopBehavior {
-	Stop,
-	Loop,
-	Shuffle,
-	Next,
-}
-
-#[derive(PartialEq)]
-#[derive(Clone)]
-#[derive(Copy)]
-enum PrevBehavior {
-	History,
-	Above,
-}
 
 #[derive(PartialEq)]
 #[derive(Clone)]
@@ -50,14 +31,14 @@ enum LeftPanelMode {
 /**
 * Contains all of the serialized data of a song
 */
-struct Song {
-	filepath_identifier: String,
-	name: String,
-	genre: String,
-	artist: String,
-	time_listened_ms: u64,
-	// playlists: Vec<String>
-}
+// struct Song {
+// 	filepath_identifier: String,
+// 	name: String,
+// 	genre: String,
+// 	artist: String,
+// 	time_listened_ms: u64,
+// 	// playlists: Vec<String>
+// }
 #[derive(Debug)]
 struct Directory {
 	filepath_identifier: String,
@@ -121,10 +102,10 @@ struct PersistentData {
 	default_directory: String,
 	theme: ThemePref,
 	playlists: Vec<Playlist>,
-	default_on_finish: LoopBehavior,
+	default_on_finish: audio_frontend::LoopBehavior,
 	default_volume: f32,
 	shuffle_memory: usize,
-	prev_behavior: PrevBehavior,
+	prev_behavior: audio_frontend::PrevBehavior,
 }
 
 fn default_persistent_data() -> PersistentData {
@@ -135,32 +116,11 @@ fn default_persistent_data() -> PersistentData {
 		default_directory: "".to_string(),
 		theme: ThemePref::DARK,
 		playlists: init_playlist_from_filepath(""),
-		default_on_finish: LoopBehavior::Stop,
-		default_volume: DEFAULT_VOLUME,
+		default_on_finish: audio_frontend::LoopBehavior::Stop,
+		default_volume: audio_frontend::DEFAULT_VOLUME,
 		shuffle_memory: 3,
-		prev_behavior: PrevBehavior::History,
+		prev_behavior: audio_frontend::PrevBehavior::History,
 	}
-}
-
-struct EndCallback {
-    callback: Option<Box<dyn FnOnce() + Send>>,
-}
-
-impl Iterator for EndCallback {
-    type Item = f32;
-    fn next(&mut self) -> Option<f32> {
-		if let Some(cb) = self.callback.take() {
-            cb();
-        }
-        None
-    }
-}
-
-impl Source for EndCallback {
-    fn current_frame_len(&self) -> Option<usize> { None }
-    fn channels(&self) -> u16 { 2 }
-    fn sample_rate(&self) -> u32 { 44100 }
-    fn total_duration(&self) -> Option<Duration> { Some(Duration::ZERO) }
 }
 
 struct InstallerData {
@@ -283,7 +243,6 @@ fn default_song_path() -> String {
 	}
 	"".to_string()
 }
-
 fn default_installer_data() -> InstallerData {
 	return InstallerData {
 		// create_taskbar_shortcut: false,
@@ -299,8 +258,7 @@ struct MyApp {
 	// For setting sizing and such
 	first_frame_rendered: bool,
 
-	loop_behavior: LoopBehavior,
-	default_on_finish: LoopBehavior,
+	loop_behavior: audio_frontend::LoopBehavior,
 	browse_mode: LeftPanelMode,
 
 	current_song_folder: String,
@@ -316,7 +274,7 @@ struct MyApp {
 	active_directory_filepath: String,
 
 	directory_map: HashMap<String, Directory>,
-	song_map: HashMap<String, Song>,
+	// song_map: HashMap<String, Song>,
 
 	directory_tree: Option<Vec<DirTreeElement>>,
 	playlist_tree: Option<Vec<PlaylistTreeElement>>,
@@ -332,7 +290,7 @@ struct MyApp {
 	edit_playlist_data: Option<PlaylistEditData>,
 
 	audio_message_channel: Arc<(Mutex<Vec<MessageToAudio>>, Condvar)>,
-	audio_receive_channel: Arc<(Mutex<Vec<MessageToGui>>, Condvar)>,
+	audio_receive_channel: Arc<(Mutex<Vec<audio_frontend::RodioData>>, Condvar)>,
 
 	central_panel_mode: CentralPanelMode,
 
@@ -349,38 +307,19 @@ struct MyApp {
 	shuffle_memory: usize,
 	shuffle_memory_text: String,
 
-	prev_behavior: PrevBehavior,
+	prev_behavior: audio_frontend::PrevBehavior,
 }
 
-#[derive(Clone)]
-struct RodioData {
-	playback_position: usize,
-	song_length: usize,
-	is_paused: bool,
-	song_name: String,
-	error_message: Option<String>,
-	shuffle_memory: usize,
+fn str_to_theme_preference(string: &str) -> ThemePref {
+	return match string {
+		"Dark" => ThemePref::DARK,
+		"Light" => ThemePref::LIGHT,
+
+		/* Default is dark */
+		&_ => ThemePref::DARK,
+	};
 }
 
-enum MessageToGui {
-	// None,
-	Data(RodioData),
-}
-
-struct PlaylistTreeElement {
-	// None = it's a playlist
-	song_name: Option<String>,
-	playlist_position: usize,
-}
-
-struct AudioThreadData {
-	// This has to exist even if unused, otherwise the lifetime causes the program to crash
-	_stream: rodio::OutputStream,
-	sink: rodio::Sink,
-	volume: f32,
-	speed: f32,
-	end_behavior: LoopBehavior,
-}
 
 fn build_playlist_tree(playlists: &Vec<Playlist>) -> Vec<PlaylistTreeElement> {
 	let mut vec: Vec<PlaylistTreeElement> = Vec::<PlaylistTreeElement>::new();
@@ -451,556 +390,6 @@ fn init_playlist_from_filepath(fp: &str) -> Vec<Playlist> {
 		});
 	}
 	return playlists;
-}
-use rodio::Source;
-use std::time::{Duration, SystemTime};
-
-/**
- * Defaults to 0
- */
-fn get_song_len_ms(file_path: &str) -> usize {
-	if let Ok(len) = mp3_duration::from_path(&file_path) {
-		return len.as_millis() as usize;
-	}
-	return 0;
-}
-
-fn audio_thread_play_song(file_path: &str, sink: &mut rodio::Sink, recieve_pair: &Arc<(Mutex<Vec<MessageToAudio>>, Condvar)>) -> Option<String> {
-	let mut return_value = None;
-	if let Ok(file) = std::fs::File::open(&file_path) {
-		let reader = std::io::BufReader::<std::fs::File>::new(file);
-		
-		if let Ok(elem) = rodio::Decoder::new_mp3(reader) {
-			sink.clear();
-			let _ = sink.try_seek(std::time::Duration::from_millis(0));
-			
-			sink.append(elem);
-
-			let rodio_pair = Arc::clone(recieve_pair);
-			sink.append(EndCallback {
-				callback: Some(Box::new(move || {
-					song_end_callback(rodio_pair);
-				})),
-			});
-		} else {
-			return_value = Some(format!("Error: Invalid mp3 format {}", file_path));
-		}
-	} else {
-		return_value = Some(format!("Error: failed to open mp3 file {}", file_path));
-	}
-	sink.play();
-	return return_value;
-}
-
-pub const DEFAULT_VOLUME: f32 = 0.75;
-pub const DEFAULT_SPEED: f32 = 1.0;
-
-fn clone_loop_behavior(behavior: &LoopBehavior) -> LoopBehavior {
-	return match *behavior {
-		LoopBehavior::Stop => LoopBehavior::Stop,
-		LoopBehavior::Loop => LoopBehavior::Loop,
-		LoopBehavior::Shuffle => LoopBehavior::Shuffle,
-		LoopBehavior::Next => LoopBehavior::Next,
-	}
-}
-
-fn song_end_callback(pair: Arc<(Mutex<Vec<MessageToAudio>>, Condvar)>) {
-	send_audio_signal(&pair, MessageToAudio::SongEnd);
-}
-
-fn generate_random_number(random_seed: u128) -> u128 {
-	let aff = random_seed.wrapping_mul(928594379).wrapping_add(531881627);
-	// This XOR operation is necessary because the low bits have low entropy.
-	// The higher bits are highly random though, so mixing them in with the lower bits gives more randomness
-	let xor_1 = aff ^ (aff >> 12);
-	let xor_2 = xor_1 ^ (xor_1 >> 23);
-	let xor_3 = xor_2 ^ (xor_2 >> 50);
-	let xor_4 = xor_3 ^ (xor_3 >> 73);
-	let xor_5 = xor_4 ^ (xor_4 >> 97);
-
-	return xor_5;
-}
-
-fn initialize_random_seed() -> u128 {
-	let start = std::time::SystemTime::now();
-	let since_the_epoch = start
-		.duration_since(std::time::UNIX_EPOCH)
-		.expect("time should go forward");
-	let mut random_seed: u128 = since_the_epoch.as_micros();
-
-	for _ in 0..50 {
-		random_seed = generate_random_number(random_seed);
-	}
-
-	return random_seed;
-}
-
-struct SongRingBuffer {
-	vec: Vec<String>,
-	front: usize,
-	back: usize,
-	current_element: usize,
-}
-
-fn new_ring_buffer(capacity: usize) -> SongRingBuffer {
-	let mut v = Vec::<String>::new();
-	for _ in 0..capacity {
-		v.push("".to_string());
-	}
-	return SongRingBuffer {
-		vec: v,
-		front: 0,
-		back: 0,
-		current_element: 0,
-	};
-}
-
-/*
-******XXXXXX*******
-      ^Back ^Front
-*/
-fn push_to_ring_buffer(buffer: &mut SongRingBuffer, element: &str) {
-	if ((buffer.front + 1) % buffer.vec.len()) == buffer.back {
-		buffer.back = (buffer.back + 1) % buffer.vec.len();
-	}
-	buffer.vec[buffer.front] = element.to_string();
-	buffer.front = (buffer.front + 1) % buffer.vec.len();
-}
-
-/**
-* Returns true if it successfully goes back to the previous song
-*/
-fn try_go_to_previous_song(buffer: &mut SongRingBuffer) -> bool {
-	if buffer.current_element == buffer.back {
-		return false;
-	} else {
-		let cap = buffer.vec.len();
-		buffer.current_element = (buffer.current_element + cap - 1) % cap;
-		return true;
-	}
-}
-fn try_go_to_next_song(buffer: &mut SongRingBuffer) -> bool {
-	let cap = buffer.vec.capacity();
-	let max_el = ((buffer.front + cap) - 1) % cap;
-	if buffer.current_element == max_el {
-		return false;
-	} else {
-		buffer.current_element = (buffer.current_element + 1) % cap;
-		return true;
-	}
-}
-
-fn song_is_in_last_n(song: &String, history_buffer: &SongRingBuffer, count: usize) -> bool {
-	let mut found = false;
-
-	let mut cur = history_buffer.front;
-	let cap = history_buffer.vec.capacity();
-	/* Just helps make sure we don't divide by zero */
-	if cap == 0 {
-		return false;
-	}
-
-	for _ in 0..count {
-		if let Some(s) = history_buffer.vec.get(cur) {
-			if s == song {
-				found = true;
-				break;
-			}
-		}
-		
-		if cur == history_buffer.back {
-			break;
-		}
-		cur = (cur + cap - 1) % cap;
-	}
-
-	return found;
-}
-
-fn play_song(try_save_to_history: bool,
-	song: &str,
-	current_song: &mut String,
-	history_buffer: &mut SongRingBuffer,
-	audio_thread_data: &mut AudioThreadData,
-	recieve_pair: &Arc<(Mutex<Vec<MessageToAudio>>, Condvar)>) -> Option<String>
-{
-	let mut err = None;
-	if try_save_to_history && song != *current_song {
-		push_to_ring_buffer(history_buffer, &song);
-		history_buffer.current_element = ((history_buffer.front + history_buffer.vec.capacity()) - 1) % history_buffer.vec.capacity();
-	}
-
-	{ /* Song playing */
-		err = audio_thread_play_song(&song, &mut audio_thread_data.sink, recieve_pair);
-		if err.is_none() {
-			*current_song = song.to_string();
-		}
-	}
-	return err;
-}
-fn update_timestamps(song: &str,
-	song_length: &mut usize,
-	current_timestamp: &mut u128,
-	saved_timestamp: &mut Option<SystemTime>)
-{
-	*song_length = get_song_len_ms(song);
-	*current_timestamp = 0;
-	*saved_timestamp = Some(time::SystemTime::now());
-}
-
-/**
-* Audio thread maintains its own list it works on, going through each element in that during the "Next".
-* 
-* When a new song is played:
-* - GUI thread checks if the current directory tree is the same as the one the audio thread has
-* 	- If it isn't, send an updated one.
-* - Send the current song.
-* - Audio thread looks through to find the new index.
-*/
-fn audio_thread_loop(
-	recieve_pair: Arc<(Mutex<Vec<MessageToAudio>>, Condvar)>,
-	send_pair: Arc<(Mutex<Vec<MessageToGui>>, Condvar)>
-) {
-	let (output_stream, audio_sink) = rodio::OutputStream::try_default().unwrap();
-	
-	let mut random_seed = initialize_random_seed();
-
-	let mut song_path = "".to_string();
-	let mut song_index = 0;
-	let mut song_length = 0;
-	let mut audio_thread_data = AudioThreadData {
-		// This has to exist even if unused, otherwise the lifetime causes the program to crash
-		_stream: output_stream,
-		sink: rodio::Sink::try_new(&audio_sink).unwrap(),
-		volume: volume_curve(DEFAULT_VOLUME),
-		speed: DEFAULT_SPEED,
-		end_behavior: LoopBehavior::Stop,
-	};
-	audio_thread_data.sink.set_volume(audio_thread_data.volume);
-	let lock = &recieve_pair.0;
-	let cvar = &recieve_pair.1;
-	let mut data_vec = lock.lock().unwrap();
-	let mut current_songs_collection = Vec::<String>::new();
-	let mut saved_timestamp: Option<time::SystemTime> = None;
-	let mut current_timestamp: u128 = 0;
-	let mut song_play_err = None;
-	let mut seeking = false;
-	let mut paused_from_seeking = false;
-	let mut randomization_memory = 5;
-	let mut prev_behavior: PrevBehavior = PrevBehavior::Above;
-
-	let mut history_buffer = new_ring_buffer(255);
-
-	loop {
-		while let Some(data) = data_vec.pop() {
-			match data {
-				// MessageToAudio::None => {println!("Do nothing");},
-				MessageToAudio::PlaySong(song) => {
-					song_play_err = play_song(true, &song, &mut song_path, &mut history_buffer, &mut audio_thread_data, &recieve_pair);
-					if song_play_err.is_none() {
-						update_timestamps(&song_path, &mut song_length, &mut current_timestamp, &mut saved_timestamp);
-
-						/* TODO: Avoid having to do this O(n) loop */
-						song_index = 0;
-						for i in 0..current_songs_collection.len() {
-							if let Some(e) = current_songs_collection.get(i) && *e == song_path {
-								song_index = i;
-								break;
-							}
-						}
-					}
-				},
-				MessageToAudio::UpdateEndBehavior(loop_behavior) => {
-					audio_thread_data.end_behavior = clone_loop_behavior(&loop_behavior);
-				},
-				MessageToAudio::UpdateVolume(volume) => {
-					audio_thread_data.volume = volume;
-					audio_thread_data.sink.set_volume(audio_thread_data.volume);
-				},
-				MessageToAudio::UpdateSpeed(speed) => {
-					if let Some(ts) = saved_timestamp && let Ok(a) = ts.elapsed() {
-						current_timestamp += (a.as_micros() as f32 * audio_thread_data.speed) as u128;
-						saved_timestamp = Some(time::SystemTime::now());
-					}
-					audio_thread_data.speed = speed;
-					audio_thread_data.sink.set_speed(speed);
-				},
-				MessageToAudio::RequestRodioData => {
-					if let Some(ts) = saved_timestamp && let Ok(a) = ts.elapsed() {
-						current_timestamp += (a.as_micros() as f32 * audio_thread_data.speed) as u128;
-						saved_timestamp = Some(time::SystemTime::now());
-					}
-
-					let send_lock = &send_pair.0;
-					let send_cvar = &send_pair.1;
-					let mut response_vec = send_lock.lock().unwrap();
-					response_vec.push(MessageToGui::Data(RodioData {
-						song_length: song_length,
-						playback_position: (current_timestamp / 1000) as usize,
-						is_paused: audio_thread_data.sink.is_paused(),
-						song_name: song_path.clone(),
-						error_message: song_play_err.clone(),
-						shuffle_memory: randomization_memory,
-					}));
-					send_cvar.notify_one();
-				},
-				MessageToAudio::Seek(position) => {
-					seeking = true;
-					if !audio_thread_data.sink.empty() {
-						let seek_time_ms: u64 = (position as f32 / audio_thread_data.speed) as u64;
-						if (song_length as u64).saturating_sub(seek_time_ms) < 1000 {
-							if !audio_thread_data.sink.is_paused() && !paused_from_seeking {
-								paused_from_seeking = true;
-							}
-							audio_thread_data.sink.pause();
-						} else {
-							if audio_thread_data.sink.is_paused() && paused_from_seeking {
-								audio_thread_data.sink.play();
-								paused_from_seeking = false;
-							}
-						}
-						let _ = audio_thread_data.sink.try_seek(std::time::Duration::from_millis(seek_time_ms));
-						current_timestamp = (position * 1000) as u128;
-						saved_timestamp = if audio_thread_data.sink.is_paused() {None} else {Some(time::SystemTime::now())};
-					}
-				},
-				MessageToAudio::SeekStop => {
-					if seeking && !audio_thread_data.sink.empty() {
-						if audio_thread_data.sink.is_paused() && paused_from_seeking {
-							audio_thread_data.sink.play();
-							paused_from_seeking = false;
-						}
-						seeking = false;
-						saved_timestamp = if audio_thread_data.sink.is_paused() {None} else {Some(time::SystemTime::now())};
-					}
-				},
-				MessageToAudio::TogglePause => {
-					if audio_thread_data.sink.is_paused() {
-						saved_timestamp = Some(time::SystemTime::now());
-						audio_thread_data.sink.play();
-					} else {
-						if let Some(ts) = saved_timestamp && let Ok(a) = ts.elapsed() {
-							current_timestamp += (a.as_micros() as f32 * audio_thread_data.speed) as u128;
-							saved_timestamp = None;
-						}
-						audio_thread_data.sink.pause();
-					}
-				},
-				MessageToAudio::SongEnd => {
-					audio_thread_data.sink.clear();
-					match audio_thread_data.end_behavior {
-						LoopBehavior::Stop => {
-							song_path = "".to_string();
-
-							current_timestamp = 0;
-							saved_timestamp = None;
-						},
-						LoopBehavior::Loop => {
-							let path_clone = song_path.clone(); /* Borrow checker agony */
-							let err = play_song(false, &path_clone, &mut song_path, &mut history_buffer, &mut audio_thread_data, &recieve_pair);
-							if err.is_none() {
-								update_timestamps(&song_path, &mut song_length, &mut current_timestamp, &mut saved_timestamp);
-							}
-						},
-						LoopBehavior::Next => {
-							let mut next_song: Option<String> = None;
-							let mut push_to_history = false;
-							if current_songs_collection.len() > 0 {
-								song_index = (song_index + 1) % current_songs_collection.len() as usize;
-
-								if let Some(song) = current_songs_collection.get(song_index) {
-									push_to_history = true;
-									next_song = Some(song.clone());
-								}
-							}
-							if let Some(song) = next_song {
-								song_play_err = play_song(push_to_history, &song, &mut song_path, &mut history_buffer, &mut audio_thread_data, &recieve_pair);
-								if song_play_err.is_none() {
-									update_timestamps(&song_path, &mut song_length, &mut current_timestamp, &mut saved_timestamp);
-								}
-							} else {
-								song_length = 1;
-								song_path = "".to_string();
-								current_timestamp = 0;
-								saved_timestamp = None;
-							}
-						}
-						LoopBehavior::Shuffle => {
-							if current_songs_collection.len() > 0 {
-								let mut song_chosen = false;
-								for _ in 0..32 {
-									random_seed = generate_random_number(random_seed);
-									let song_index = ((random_seed % (usize::MAX as u128)) as usize) % current_songs_collection.len();
-									if let Some(song) = current_songs_collection.get(song_index) {
-										if song_is_in_last_n(song, &history_buffer, randomization_memory) {
-											continue;
-										}
-										song_play_err = play_song(true, &song, &mut song_path, &mut history_buffer, &mut audio_thread_data, &recieve_pair);
-										if song_play_err.is_none() {
-											update_timestamps(&song_path, &mut song_length, &mut current_timestamp, &mut saved_timestamp);
-										}
-										song_chosen = true;
-										break;
-									}
-								}
-								if !song_chosen {
-									random_seed = generate_random_number(random_seed);
-									let song_index = ((random_seed % (usize::MAX as u128)) as usize) % current_songs_collection.len();
-									if let Some(song) = current_songs_collection.get(song_index) {
-										song_play_err = play_song(true, &song, &mut song_path, &mut history_buffer, &mut audio_thread_data, &recieve_pair);
-										if song_play_err.is_none() {
-											update_timestamps(&song_path, &mut song_length, &mut current_timestamp, &mut saved_timestamp);
-										}
-									}
-								}
-							} else {
-								song_length = 1;
-								song_path = "".to_string();
-								current_timestamp = 0;
-								saved_timestamp = None;
-							}
-						}
-					}
-				},
-				MessageToAudio::SetSongCollection(vec, optional_index) => {
-					current_songs_collection = vec;
-					song_index = if let Some(index) = optional_index {index}
-						else {current_songs_collection.len().saturating_sub(1)};
-				},
-				MessageToAudio::ClearError => {
-					song_play_err = None;
-				},
-				MessageToAudio::PreviousSong => {
-					match prev_behavior {
-						PrevBehavior::Above => {
-							let mut prev_song: Option<String> = None;
-							let mut push_to_history = false;
-							if current_songs_collection.len() > 0 {
-								song_index = (song_index + current_songs_collection.len() - 1) % current_songs_collection.len() as usize;
-
-								if let Some(song) = current_songs_collection.get(song_index) {
-									push_to_history = true;
-									prev_song = Some(song.clone());
-								}
-							}
-							if let Some(song) = prev_song {
-								song_play_err = play_song(push_to_history, &song, &mut song_path, &mut history_buffer, &mut audio_thread_data, &recieve_pair);
-								if song_play_err.is_none() {
-									update_timestamps(&song_path, &mut song_length, &mut current_timestamp, &mut saved_timestamp);
-								}
-							} else {
-								song_length = 1;
-								song_path = "".to_string();
-								current_timestamp = 0;
-								saved_timestamp = None;
-							}
-						},
-						PrevBehavior::History => {
-							if try_go_to_previous_song(&mut history_buffer) {
-								let song = history_buffer.vec[history_buffer.current_element].clone();
-								song_play_err = play_song(false, &song, &mut song_path, &mut history_buffer, &mut audio_thread_data, &recieve_pair);
-								if song_play_err.is_none() {
-									update_timestamps(&song_path, &mut song_length, &mut current_timestamp, &mut saved_timestamp);
-									song_index = 0;
-									for i in 0..current_songs_collection.len() {
-										if let Some(e) = current_songs_collection.get(i) && *e == song {
-											song_index = i;
-											break;
-										}
-									}
-								}
-							}
-						},
-					}
-					
-				},
-				MessageToAudio::UpdateShuffleMemory(mem) => {
-					randomization_memory = mem;
-				},
-				MessageToAudio::UpdatePrevBehavior(new_behavior) => {
-					prev_behavior = new_behavior;
-				}
-			}
-		}
-		// If this unwrap fails, it should crash.
-		data_vec = cvar.wait(data_vec).unwrap();
-	}
-}
-
-fn request_rodio_data(send_pair: &Arc<(Mutex<Vec<MessageToAudio>>, Condvar)>, recv_pair: &Arc<(Mutex<Vec<MessageToGui>>, Condvar)>) -> RodioData {
-	let lock = &recv_pair.0;
-	let cvar = &recv_pair.1;
-	send_audio_signal(send_pair, MessageToAudio::RequestRodioData);
-
-	if let Ok(mut vec) = lock.lock() {
-		loop {
-			while vec.len() == 0 {
-				vec = cvar.wait(vec).unwrap();
-			}
-			if let Some(element) = vec.pop() {
-				match element {
-					// MessageToGui::None => {
-					// 	vec.pop();
-					// },
-					MessageToGui::Data(data) => {
-						let ret = data.clone();
-						return ret;
-					},
-				}
-			}
-		}
-	}
-	return RodioData {
-		playback_position: 0,
-		song_length: 0,
-		song_name: "".to_string(),
-		is_paused: false,
-		error_message: None,
-		shuffle_memory: 0,
-	};
-	// vec = if let Ok(mut vec) 
-}
-
-fn send_audio_signal(pair: &Arc<(Mutex<Vec<MessageToAudio>>, Condvar)>, message: MessageToAudio) {
-	let lock = &pair.0;
-	let cvar = &pair.1;
-	if let Ok(mut data) = lock.lock() {
-		data.push(message);
-		cvar.notify_one();
-	}
-}
-
-#[derive(PartialEq)]
-enum MessageToAudio {
-	// None,
-	PlaySong(String),
-	UpdateEndBehavior(LoopBehavior),
-	UpdateVolume(f32),
-	UpdateSpeed(f32),
-	RequestRodioData,
-	Seek(usize),
-	SeekStop,
-	TogglePause,
-	SongEnd,
-	/**
-	* Tells the audio thread to set its current collection to Vec<String>,
-	* and that the current playing song is at the optional location
-	*/
-	SetSongCollection(Vec<String>, Option<usize>),
-	ClearError,
-	PreviousSong,
-	UpdateShuffleMemory(usize),
-	UpdatePrevBehavior(PrevBehavior),
-}
-
-fn str_to_theme_preference(string: &str) -> ThemePref {
-	return match string {
-		"Dark" => ThemePref::DARK,
-		"Light" => ThemePref::LIGHT,
-
-		/* Default is dark */
-		&_ => ThemePref::DARK,
-	};
 }
 
 fn find_persistent_data() -> (PersistentData, String) {
@@ -1076,30 +465,30 @@ fn find_persistent_data() -> (PersistentData, String) {
 				} else if line.starts_with(default_end_behavior_identifier) {
 					match &line[default_end_behavior_identifier.len()..] {
 						"Loop" => {
-							persistent_data.default_on_finish = LoopBehavior::Loop;
+							persistent_data.default_on_finish = audio_frontend::LoopBehavior::Loop;
 						},
 						"Stop" => {
-							persistent_data.default_on_finish = LoopBehavior::Stop;
+							persistent_data.default_on_finish = audio_frontend::LoopBehavior::Stop;
 						},
 						"Shuffle" => {
-							persistent_data.default_on_finish = LoopBehavior::Shuffle;
+							persistent_data.default_on_finish = audio_frontend::LoopBehavior::Shuffle;
 						},
 						"Next" => {
-							persistent_data.default_on_finish = LoopBehavior::Next;
+							persistent_data.default_on_finish = audio_frontend::LoopBehavior::Next;
 						},
 						_ => {},
 					}
 				} else if line.starts_with(default_volume_identifier) {
-					persistent_data.default_volume = line[default_volume_identifier.len()..].parse().unwrap_or(DEFAULT_VOLUME);
+					persistent_data.default_volume = line[default_volume_identifier.len()..].parse().unwrap_or(audio_frontend::DEFAULT_VOLUME);
 				} else if line.starts_with(shuffle_memory_identifier) {
 					persistent_data.shuffle_memory = line[shuffle_memory_identifier.len()..].parse().unwrap_or(3);
 				} else if line.starts_with(prev_behavior_identifier) {
 					match &line[prev_behavior_identifier.len()..] {
 						"Above" => {
-							persistent_data.prev_behavior = PrevBehavior::Above;
+							persistent_data.prev_behavior = audio_frontend::PrevBehavior::Above;
 						},
 						"History" => {
-							persistent_data.prev_behavior = PrevBehavior::History;
+							persistent_data.prev_behavior = audio_frontend::PrevBehavior::History;
 						},
 						_ => {},
 					}
@@ -1136,40 +525,11 @@ fn find_persistent_data() -> (PersistentData, String) {
 
 	return (persistent_data, ret_str);
 }
-use std::io::Write;
-fn initialize_crash_logger(pinetree_directory: &str) {
-	let log_location = build_full_filepath(pinetree_directory, "crash_report.log").to_string();
-	panic::set_hook(Box::new(move |panic_info| {
-        let mut file = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&log_location)
-            .unwrap();
-
-        let msg = if let Some(s) = panic_info.payload().downcast_ref::<&str>() {
-            *s
-        } else if let Some(s) = panic_info.payload().downcast_ref::<String>() {
-            s.as_str()
-        } else {
-            "Unknown panic payload"
-        };
-
-        let location = if let Some(loc) = panic_info.location() {
-            format!("{}:{}", loc.file(), loc.line())
-        } else {
-            "Unknown location".to_string()
-        };
-
-		let backtrace = std::backtrace::Backtrace::force_capture();
-
-        let _ = writeln!(file, "Panic occurred: {}\nLocation: {}\nBacktrace: {:?}", msg, location, backtrace);
-    }));
-}
 
 impl Default for MyApp {
 	fn default() -> Self {
 		let message_param: Vec<MessageToAudio> = Vec::<MessageToAudio>::new();
-		let gui_message_param: Vec<MessageToGui> = Vec::<MessageToGui>::new();
+		let gui_message_param: Vec<RodioData> = Vec::<RodioData>::new();
 		
 		let audio_thread_recieve = Arc::new((Mutex::new(message_param), Condvar::new()));
 		let gui_thread_send = Arc::clone(&audio_thread_recieve);
@@ -1214,7 +574,6 @@ impl Default for MyApp {
 		Self {
 			first_frame_rendered: false,
 			loop_behavior: clone_loop_behavior(&persistent_data.default_on_finish),
-			default_on_finish: clone_loop_behavior(&persistent_data.default_on_finish),
 			browse_mode: LeftPanelMode::Files,
 			current_song_folder: persistent_data.default_directory.clone(),
 			song_speed: DEFAULT_SPEED,
@@ -1226,7 +585,7 @@ impl Default for MyApp {
 			// songs_list: song_entry_list,
 			active_directory_filepath: persistent_data.default_directory.clone(),
 			directory_map: dir_map,
-			song_map: HashMap::<String, Song>::new(),
+			// song_map: HashMap::<String, Song>::new(),
 			directory_tree: None,
 			playlist_tree: None,
 
@@ -1342,12 +701,12 @@ fn init_directory_at_filepath_recursive(directory_filepath: &str, dir_map: &mut 
 }
 
 
-fn loop_behavior_to_str(lb: &LoopBehavior) -> &'static str {
+fn loop_behavior_to_str(lb: &audio_frontend::LoopBehavior) -> &'static str {
 	match lb {
-		LoopBehavior::Stop => "Stop",
-		LoopBehavior::Loop => "Loop",
-		LoopBehavior::Shuffle => "Shuffle",
-		LoopBehavior::Next => "Next",
+		audio_frontend::LoopBehavior::Stop => "Stop",
+		audio_frontend::LoopBehavior::Loop => "Loop",
+		audio_frontend::LoopBehavior::Shuffle => "Shuffle",
+		audio_frontend::LoopBehavior::Next => "Next",
 	}
 }
 
@@ -1579,21 +938,6 @@ fn render_directory_elements(
 		});
 	}
 	return file_action;
-}
-
-/**
-* Human hearing is logarithmic, so the volume slider follows an exponential curve to compensate.
-*
-* Specifically this is one that is meant to very closely match the decibel scale (hence the magic number of 6.908).
-* Has to be clamped though unfortunately, because exponential curves never technically reach 0.
-*
-* This creates a sharp cutoff at the lowest volume, but at that point it's quiet enough I don't imagine people will notice.
-*
-* Surprised this isn't more common.
-*/
-fn volume_curve(input: f32) -> f32 {
-	if input <= -0.195 {return 0.0;}
-	return (input * 6.908).exp() / 1000.0
 }
 
 /**
@@ -1830,29 +1174,29 @@ fn set_visuals(ctx: &egui::Context, theme: &ThemePref) {
 	}
 }
 
-fn default_on_finish_to_str(behavior: &LoopBehavior) -> &'static str {
+fn default_on_finish_to_str(behavior: &audio_frontend::LoopBehavior) -> &'static str {
 	match behavior {
-		LoopBehavior::Stop => {
+		audio_frontend::LoopBehavior::Stop => {
 			"Stop"
 		},
-		LoopBehavior::Loop => {
+		audio_frontend::LoopBehavior::Loop => {
 			"Loop"
 		},
-		LoopBehavior::Next => {
+		audio_frontend::LoopBehavior::Next => {
 			"Next"
 		},
-		LoopBehavior::Shuffle => {
+		audio_frontend::LoopBehavior::Shuffle => {
 			"Shuffle"
 		},
 	}
 }
 
-fn prev_behavior_to_str(p: &PrevBehavior) -> &str {
+fn prev_behavior_to_str(p: &audio_frontend::PrevBehavior) -> &str {
 	return match *p {
-		PrevBehavior::Above => {
+		audio_frontend::PrevBehavior::Above => {
 			"Above"
 		},
-		PrevBehavior::History => {
+		audio_frontend::PrevBehavior::History => {
 			"History"
 		},
 	};
@@ -1862,8 +1206,7 @@ fn write_internal_data(path: &str, persistent_data: &PersistentData) -> Result<(
 	use std::io::prelude::*;
 	let file = std::fs::File::create(path);
 	if let Ok(mut file) = file {
-		let mut data_to_write = String::new();
-		data_to_write = format!("VERSION: {}\n", CURRENT_VERSION);
+		let mut data_to_write = format!("VERSION: {}\n", CURRENT_VERSION);
 
 		data_to_write = format!("{}{}", data_to_write, "SETTINGS\n");
 		data_to_write = format!("{}Theme: {}\n", data_to_write, theme_to_str(&persistent_data.theme));
@@ -2185,10 +1528,10 @@ impl eframe::App for MyApp {
 				egui::ComboBox::from_label("")
 					.selected_text(loop_behavior_to_str(&self.loop_behavior))
 					.show_ui(ui, |ui| {
-						ui.selectable_value(&mut self.loop_behavior, LoopBehavior::Stop, "Stop");
-						ui.selectable_value(&mut self.loop_behavior, LoopBehavior::Loop, "Loop");
-						ui.selectable_value(&mut self.loop_behavior, LoopBehavior::Shuffle, "Shuffle");
-						ui.selectable_value(&mut self.loop_behavior, LoopBehavior::Next, "Next");
+						ui.selectable_value(&mut self.loop_behavior, audio_frontend::LoopBehavior::Stop, "Stop");
+						ui.selectable_value(&mut self.loop_behavior, audio_frontend::LoopBehavior::Loop, "Loop");
+						ui.selectable_value(&mut self.loop_behavior, audio_frontend::LoopBehavior::Shuffle, "Shuffle");
+						ui.selectable_value(&mut self.loop_behavior, audio_frontend::LoopBehavior::Next, "Next");
 					}
 				);
 				if ob != self.loop_behavior {
@@ -3236,10 +2579,10 @@ impl eframe::App for MyApp {
 						egui::ComboBox::from_label("  ")
 							.selected_text(loop_behavior_to_str(&self.persistent_data.default_on_finish))
 							.show_ui(ui, |ui| {
-								ui.selectable_value(&mut self.persistent_data.default_on_finish, LoopBehavior::Stop, "Stop");
-								ui.selectable_value(&mut self.persistent_data.default_on_finish, LoopBehavior::Loop, "Loop");
-								ui.selectable_value(&mut self.persistent_data.default_on_finish, LoopBehavior::Shuffle, "Shuffle");
-								ui.selectable_value(&mut self.persistent_data.default_on_finish, LoopBehavior::Next, "Next");
+								ui.selectable_value(&mut self.persistent_data.default_on_finish, audio_frontend::LoopBehavior::Stop, "Stop");
+								ui.selectable_value(&mut self.persistent_data.default_on_finish, audio_frontend::LoopBehavior::Loop, "Loop");
+								ui.selectable_value(&mut self.persistent_data.default_on_finish, audio_frontend::LoopBehavior::Shuffle, "Shuffle");
+								ui.selectable_value(&mut self.persistent_data.default_on_finish, audio_frontend::LoopBehavior::Next, "Next");
 							}
 						);
 					});
@@ -3248,17 +2591,17 @@ impl eframe::App for MyApp {
 						egui::ComboBox::from_label("   ")
 							.selected_text(
 								match self.persistent_data.prev_behavior {
-									PrevBehavior::Above => {
+									audio_frontend::PrevBehavior::Above => {
 										"Go Up Song List"
 									},
-									PrevBehavior::History => {
+									audio_frontend::PrevBehavior::History => {
 										"Previously Listened"
 									}
 								}
 							)
 							.show_ui(ui, |ui| {
-								ui.selectable_value(&mut self.persistent_data.prev_behavior, PrevBehavior::Above, "Go Up Song List");
-								ui.selectable_value(&mut self.persistent_data.prev_behavior, PrevBehavior::History, "Previously Listened");
+								ui.selectable_value(&mut self.persistent_data.prev_behavior, audio_frontend::PrevBehavior::Above, "Go Up Song List");
+								ui.selectable_value(&mut self.persistent_data.prev_behavior, audio_frontend::PrevBehavior::History, "Previously Listened");
 							}
 						);
 						if self.persistent_data.prev_behavior != self.prev_behavior {
@@ -3469,6 +2812,36 @@ impl eframe::App for MyApp {
 			}
 		});
 	}
+}
+
+fn initialize_crash_logger(pinetree_directory: &str) {
+	let log_location = build_full_filepath(pinetree_directory, "crash_report.log").to_string();
+	panic::set_hook(Box::new(move |panic_info| {
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_location)
+            .unwrap();
+
+        let msg = if let Some(s) = panic_info.payload().downcast_ref::<&str>() {
+            *s
+        } else if let Some(s) = panic_info.payload().downcast_ref::<String>() {
+            s.as_str()
+        } else {
+            "Unknown panic payload"
+        };
+
+        let location = if let Some(loc) = panic_info.location() {
+            format!("{}:{}", loc.file(), loc.line())
+        } else {
+            "Unknown location".to_string()
+        };
+
+		let backtrace = std::backtrace::Backtrace::force_capture();
+
+		use std::io::Write;
+        let _ = writeln!(file, "Panic occurred: {}\nLocation: {}\nBacktrace: {:?}", msg, location, backtrace);
+    }));
 }
 
 fn main() -> eframe::Result {
